@@ -17,6 +17,7 @@
   * You can find this with `dmesg`.
   * 
   */
+#include <mx/sys/timeUtils.hpp>
 
 #include "tmcController.hpp"
 
@@ -51,18 +52,48 @@ int main( int argc,    ///< [in] the number of command line arguments, must be 2
     
     tmcc.hw_stop_updatemsgs();
 
-    uint16_t di;
+    tmcController::KMMIParams par;
+    tmcc.kpz_req_kcubemmiparams(par);
 
-    tmcc.pz_req_tpz_dispsettings(di);
-
-    std::cerr << di << "\n";
-
-    tmcc.pz_set_tpz_dispsettings(50);
-
-    tmcc.pz_req_tpz_dispsettings(di);
-
-    std::cerr << di << "\n";
+    par.dump(std::cout);
     
+    par.DispBrightness = 0;
+
+    tmcc.kpz_set_kcubemmiparams(par);
+
+    tmcc.kpz_req_kcubemmiparams(par);
+
+    par.dump(std::cout);
+
+
+    tmcController::TPZIOSettings tios;
+    tmcc.pz_req_tpz_iosettings(tios);
+    tios.dump(std::cout);
+
+    tios.VoltageLimit = 0x03;
+
+    tmcc.pz_set_tpz_iosettings(tios);
+
+    tmcc.pz_req_tpz_iosettings(tios);
+    tios.dump(std::cout);
+
+
+    tmcc.mod_set_chanenablestate(0x02);
+
+    int16_t ov;
+    tmcc.pz_req_outputvolts(ov);
+
+    std::cout << "Output Volts: " << ov << "\n";
+
+    ov = 0.0/150. * 32767;
+
+    std::cerr << ov << "\n";
+    tmcc.pz_set_outputvolts(ov);
+
+    mx::sys::milliSleep(500);
+    tmcc.pz_req_outputvolts(ov);
+
+    std::cout << "Output Volts: " << ov << "\n";
 
     return EXIT_SUCCESS;
 }

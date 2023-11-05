@@ -375,9 +375,7 @@ public:
 
 ///@}
 
-/** \name Hardware Info
-  * Hardware information obtained from hw_req_hwinfo
-  *  
+/** \name Command Data Structures
   * @{ 
   */
 
@@ -441,15 +439,6 @@ public:
     }; //struct HWInfo
 
 
-    
-
-///@}
-
-/** \name PZ Status
-  * @{ 
-  */
-
-public:
 
     /// Status of the Piezos, filled in by \ref pz_req_pzstatusupdate
     /** \note this currently only works for the TPZ001 KPZ101
@@ -523,6 +512,47 @@ public:
 
     };
 
+    /// TPZ I/O Setting, filled in by \ref pz_req_tpz_iosettings 
+    /**
+      * 
+      */
+    struct TPZIOSettings
+    {
+        uint16_t VoltageLimit {0x00};
+        uint16_t HubAnalogInput {0x00};
+
+        /// Dump details to a stream
+        /**
+          * \tparam streamT is an std::iostream like class 
+          */
+        template<class streamT>
+        void dump(streamT & ios /**< [out] the stream to dump to*/);
+    };
+
+    /// K-Cube MMI Params, filled in by \ref kpz_req_kcubemmiparams
+    /** 
+      * 
+      */
+    struct KMMIParams 
+    {
+        uint16_t JSMode {0x01};
+        uint16_t JSVoltGearBox {0x03};
+        int32_t JSVoltStep {1};
+        int16_t DirSense {0};
+        int32_t PresetVolt1 {0};
+        int32_t PresetVolt2 {0};
+        uint16_t DispBrightness {100};
+        uint16_t DispTimeout {0};
+        uint16_t DispDimLevel {10};
+
+        /// Dump details to a stream
+        /**
+          * \tparam streamT is an std::iostream like class 
+          */
+        template<class streamT>
+        void dump(streamT & ios /**< [out] the stream to dump to*/);
+    };
+
 ///@}
 
 /** \name APT Commands
@@ -547,6 +577,16 @@ public:
       * \returns -666 if device not available in either \ftdi_write_data 
       */
     int mod_identify( bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure*/);
+
+
+    //pg 47
+    int mod_set_chanenablestate( const uint8_t & ces, ///< [in] the desired channel enable state. 0x01 enable, 0x02 disable
+                                 bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+                               );
+    
+    int mod_req_chanenablestate( uint8_t & ces,     ///< [out] the channel enable state. 0x01 enabled, 0x02 disabled
+                                 bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+                               );
 
     /// Stop automatic status updates from the controller 
     /** Sends the MGMSG_HW_STOP_UPDATEMSGS command (0x0012)
@@ -574,6 +614,14 @@ public:
                      bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
                    );
 
+    int pz_set_outputvolts( const int16_t & ov, ///< [in] the output volts to set, converted from a percentage of max value
+                            bool errmsg = true  ///< [in] [optional] flag controlling if an error message is printed on failure
+                          );
+    
+    int pz_req_outputvolts( int16_t & ov, ///< [out] the output volts currently set
+                            bool errmsg = true  ///< [in] [optional] flag controlling if an error message is printed on failure
+                          );
+
     /// Get Piezo status
     /** Sends the MGMSG_PZ_REQ_PZSTATUSUPDATE command (0x0660) and parses the result into a \ref PZstatus structure.
       * See page 205 of the APT manual.
@@ -587,7 +635,7 @@ public:
       * \returns -300 if not enough data read
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
       */
-    int pz_req_pzstatusupdate( PZStatus & pzs, ///< [out] the \ref PZStatus structure to populate
+    int pz_req_pzstatusupdate( PZStatus & pzs,    ///< [out] the \ref PZStatus structure to populate
                                bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
                              );
 
@@ -618,6 +666,44 @@ public:
     int pz_req_tpz_dispsettings( uint16_t & dispint, ///< [out] the intensity value returned by the device.
                                  bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
                                );
+
+    int pz_set_tpz_iosettings( const TPZIOSettings & tios, ///< [in] the \ref TPZIOSettings to set
+                                bool errmsg = true         ///< [in] [optional] flag controlling if an error message is printed on failure
+                             );
+
+
+    int pz_req_tpz_iosettings( TPZIOSettings & tios, ///< [out] the \ref TPZIOSettings to populate
+                               bool errmsg = true    ///< [in] [optional] flag controlling if an error message is printed on failure
+                             );
+
+    /// Set top panel wheel and display parameters
+    /** Sends the MGMSG_KPZ_SET_KCUBEMMIPARAMS message (0x07F0).
+      * See page 235 of the APT manual.
+      * 
+      * \returns 0 on succcess
+      * \returns <0 on error from connect
+      * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
+      * \returns -666 if device not available in either \ftdi_write_data  
+      */
+    int kpz_set_kcubemmiparams( const KMMIParams & kmp, ///< [in] the \ref KMMIParams to set
+                                bool errmsg = true      ///< [in] [optional] flag controlling if an error message is printed on failure
+                              );
+
+    /// Get top panel wheel and display parameters
+    /** Sends the MGMSG_KPZ_REQ_KCUBEMMIPARAMS message (0x07F1) and parses the results.
+      * See page 235 of the APT manual.
+      * 
+      * \returns 0 on succcess
+      * \returns <0 on error from connect
+      * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
+      * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
+      * \returns -300 if not enough data read
+      * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
+      */
+    int kpz_req_kcubemmiparams( KMMIParams & kmp,  ///< [out] the \ref KMMIParams structure to populate
+                                bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+                              );
+
 
 ///@}
 
@@ -960,6 +1046,66 @@ unsigned int tmcController::chipid()
         }                                                                                        \
     }             
 
+template<class streamT>
+void tmcController::HWInfo::dump(streamT & ios)
+{
+    ios << "Connected to: \n";
+    ios << "      Model: " << modelNumber << "\n";
+    ios << "       Type: " << type << "\n";
+    ios << "    Ser Num: " << serialNumber << "\n";
+    ios << "     HW Ver: " << hwVer << "\n";
+    ios << "     HW Mod: " << hwMod << "\n";
+    ios << "   Num. Ch.: " << nChannels << "\n";
+    ios << "   F/W Ver.: " << fwMaj << "." << fwMin << "." << fwInt << "\n";
+}
+
+double tmcController::PZStatus::age()
+{
+  timespec tsp;
+  clock_gettime(CLOCK_REALTIME, &tsp);
+  return (tsp.tv_sec + ((1.0*tsp.tv_nsec)/1e9)) - (statusTime.tv_sec + ((1.0*statusTime.tv_nsec)/1e9));
+}
+
+template<class streamT>
+void tmcController::PZStatus::dump(streamT & ios)
+{
+    ios << "PZ Status: \n";
+    ios << "    Voltage: " << voltage << "\n";
+    ios << "   Position: " << voltage << "\n";
+    ios << "  Connected: " << connected << "\n";
+    ios << "     Zeroed: " << zeroed << "\n";
+    ios << "    Zeroing: " << zeroing << "\n";
+    ios << "   SG Conn.: " << sgConnected << "\n";
+    ios << "  P.C. Mode: " << pcMode << "\n";
+    ios << "        Age: " << age() << " sec\n";
+}
+
+template<class streamT>
+void tmcController::TPZIOSettings::dump(streamT & ios)
+{
+    ios << "TPZ IO Settings: \n";
+    ios << "     VoltageLimit: " << VoltageLimit << "\n";
+    ios << "   HubAnalogInput: " << HubAnalogInput << "\n";
+}
+
+template<class streamT>
+void tmcController::KMMIParams::dump(streamT & ios)
+{
+    ios << "K-Cube MMI Params: \n";
+    ios << "             JSMode: " << JSMode << "\n";
+    ios << "      JSVoltGearBox: " << JSVoltGearBox << "\n";
+    ios << "         JSVoltStep: " << JSVoltStep << "\n";
+    ios << "           DirSense: " << DirSense << "\n";
+    ios << "        PresetVolt1: " << PresetVolt1 << "\n";
+    ios << "        PresetVolt2: " << PresetVolt2 << "\n";
+    ios << "     DispBrightness: " << DispBrightness << "\n";
+    ios << "        DispTimeout: " << DispTimeout << "\n";
+    ios << "       DispDimLevel: " << DispDimLevel << "\n";
+
+
+
+
+}
 #define TMCC_SNDBUF_HEAD(b0,b1,b2,b3,b4,b5) \
     m_sndbuf[0] = b0;                       \
     m_sndbuf[1] = b1;                       \
@@ -1035,6 +1181,36 @@ int tmcController::mod_identify(bool errmsg /*default=true*/)
 }
 
 inline
+int tmcController::mod_set_chanenablestate( const uint8_t & ces,
+                                            bool errmsg
+                                          )
+{
+    TMCC_CHECK_CONNECTED("mod_set_chanenablestate")
+
+    TMCC_SNDBUF_HEAD(0x10,0x02,0x01,ces,0x50,0x01)
+    
+    TMCC_WRITE_REQUEST("mod_set_chanenablestate")
+
+    return 0;
+}
+
+inline   
+int tmcController::mod_req_chanenablestate( uint8_t & ces,     
+                                            bool errmsg
+                                          )
+{
+    TMCC_CHECK_CONNECTED("mod_req_chanenablestate")
+
+    TMCC_SNDBUF_HEAD(0x11,0x02,0x01,0x00,0x50,0x01)
+
+    TMCC_WRITE_REQUEST("mod_req_chanenablestate")
+
+    TMCC_READ_RESPONSE("mod_req_chanenablestate", 6);
+
+    ces = m_rdbuf[3];
+}
+
+inline
 int tmcController::hw_stop_updatemsgs( bool errmsg )
 {
     TMCC_CHECK_CONNECTED("hw_stop_updatemsgs")
@@ -1077,6 +1253,42 @@ int tmcController::hw_req_info( HWInfo & hwi,
 
 }
 
+inline
+int tmcController::pz_set_outputvolts( const int16_t & ov, 
+                                       bool errmsg
+                                     )
+{
+    TMCC_CHECK_CONNECTED("pz_set_outputvolts")
+
+    TMCC_SNDBUF_HEAD(0x43,0x06,0x04,0x00, 0x50 | 0x80,0x01)
+
+    m_sndbuf[6] = 0x01;
+    m_sndbuf[7] = 0x00;
+    *((int16_t*) &m_sndbuf[8]) = ov;
+
+    TMCC_WRITE_COMMAND("pz_set_outputvolts",10)
+
+    return 0;
+}
+
+inline  
+int tmcController::pz_req_outputvolts( int16_t & ov, 
+                                       bool errmsg
+                                     )
+{
+    TMCC_CHECK_CONNECTED("pz_req_outputvolts")
+
+    TMCC_SNDBUF_HEAD(0x44,0x06,0x01,0x00,0x50,0x01)
+
+    TMCC_WRITE_REQUEST("pz_req_outputvolts")
+
+    TMCC_READ_RESPONSE("pz_req_outputvolts", 10)
+
+    ov = *((int16_t *) &m_rdbuf[8]);
+
+    return 0;
+
+}
 
 inline
 int tmcController::pz_req_pzstatusupdate( PZStatus & pzs,
@@ -1142,40 +1354,105 @@ int tmcController::pz_req_tpz_dispsettings( uint16_t & dispint,
     return 0;
 }
 
-
-template<class streamT>
-void tmcController::HWInfo::dump(streamT & ios)
+int tmcController::pz_set_tpz_iosettings( const TPZIOSettings & tios,
+                                          bool errmsg       
+                                        )
 {
-    ios << "Connected to: \n";
-    ios << "      Model: " << modelNumber << "\n";
-    ios << "       Type: " << type << "\n";
-    ios << "    Ser Num: " << serialNumber << "\n";
-    ios << "     HW Ver: " << hwVer << "\n";
-    ios << "     HW Mod: " << hwMod << "\n";
-    ios << "   Num. Ch.: " << nChannels << "\n";
-    ios << "   F/W Ver.: " << fwMaj << "." << fwMin << "." << fwInt << "\n";
+    TMCC_CHECK_CONNECTED("pz_set_tpz_iosettings")
+
+    TMCC_SNDBUF_HEAD(0xD4,0x07,0x0A,0x00, 0x50 | 0x80,0x01)
+
+    m_sndbuf[6] = 0x01;
+    m_sndbuf[7] = 0x00;
+    *((uint16_t*) &m_sndbuf[8]) = tios.VoltageLimit;
+    *((uint16_t*) &m_sndbuf[10]) = tios.HubAnalogInput;
+    m_sndbuf[12] = 0x00;
+    m_sndbuf[13] = 0x00;
+    m_sndbuf[14] = 0x00;
+    m_sndbuf[15] = 0x00;
+
+    TMCC_WRITE_COMMAND("pz_set_tpz_iosettings",16)
+
+    return 0;
 }
 
-double tmcController::PZStatus::age()
+int tmcController::pz_req_tpz_iosettings( TPZIOSettings & tios, 
+                                          bool errmsg   
+                                        )
 {
-  timespec tsp;
-  clock_gettime(CLOCK_REALTIME, &tsp);
-  return (tsp.tv_sec + ((1.0*tsp.tv_nsec)/1e9)) - (statusTime.tv_sec + ((1.0*statusTime.tv_nsec)/1e9));
+    TMCC_CHECK_CONNECTED("pz_req_tpz_iosettings")
+
+    TMCC_SNDBUF_HEAD(0xD5,0x07,0x01,0x00,0x50,0x01)
+
+    TMCC_WRITE_REQUEST("pz_req_tpz_iosettings")
+
+    TMCC_READ_RESPONSE("pz_req_tpz_iosettings", 16)
+
+    tios.VoltageLimit = *((uint16_t*) &m_rdbuf[8]);
+    tios.HubAnalogInput = *((uint16_t*) &m_rdbuf[10]);
+
+    return 0;
+    
 }
 
-template<class streamT>
-void tmcController::PZStatus::dump(streamT & ios)
+int tmcController::kpz_set_kcubemmiparams( const KMMIParams & kmp,
+                                           bool errmsg /*default = true*/ 
+                                         )
 {
-    ios << "PZ Status: \n";
-    ios << "    Voltage: " << voltage << "\n";
-    ios << "   Position: " << voltage << "\n";
-    ios << "  Connected: " << connected << "\n";
-    ios << "     Zeroed: " << zeroed << "\n";
-    ios << "    Zeroing: " << zeroing << "\n";
-    ios << "   SG Conn.: " << sgConnected << "\n";
-    ios << "  P.C. Mode: " << pcMode << "\n";
-    ios << "        Age: " << age() << " sec\n";
+    TMCC_CHECK_CONNECTED("kpz_set_kcubemmiparams")
+
+    TMCC_SNDBUF_HEAD(0xF0,0x07,0x22,0x00, 0x50 | 0x80,0x01)
+
+    m_sndbuf[6] = 0x01;
+    m_sndbuf[7] = 0x00;
+    *((uint16_t*) &m_sndbuf[8]) = kmp.JSMode;
+    *((uint16_t*) &m_sndbuf[10]) = kmp.JSVoltGearBox;
+    *((int32_t*) &m_sndbuf[12]) = kmp.JSVoltStep;
+    *((uint16_t*) &m_sndbuf[16]) = kmp.DirSense;
+    *((int32_t*) &m_sndbuf[18]) = kmp.PresetVolt1;
+    *((int32_t*) &m_sndbuf[22]) = kmp.PresetVolt2;
+    *((uint16_t*) &m_sndbuf[26]) = kmp.DispBrightness;
+    *((uint16_t*) &m_sndbuf[28]) = kmp.DispTimeout;
+    *((uint16_t*) &m_sndbuf[30]) = kmp.DispDimLevel;
+    m_sndbuf[34] = 0;
+    m_sndbuf[35] = 0;
+    m_sndbuf[36] = 0;
+    m_sndbuf[37] = 0;
+    m_sndbuf[38] = 0;
+    m_sndbuf[39] = 0;
+
+    TMCC_WRITE_COMMAND("kpz_set_kcubemmiparams",40)
+
+    return 0;
+
 }
+
+int tmcController::kpz_req_kcubemmiparams( KMMIParams & kmp,
+                                           bool errmsg /*default = true*/ 
+                                         )
+{
+    TMCC_CHECK_CONNECTED("kpz_req_kcubemmiparams")
+
+    TMCC_SNDBUF_HEAD(0xF1,0x07,0x01,0x00,0x50,0x01)
+
+    TMCC_WRITE_REQUEST("kpz_req_kcubemmiparams")
+
+    TMCC_READ_RESPONSE("kpz_req_kcubemmiparams", 40)
+
+    kmp.JSMode = *((uint16_t*) &m_rdbuf[8]);
+    kmp.JSVoltGearBox = *((uint16_t*) &m_rdbuf[10]);
+    kmp.JSVoltStep = *((int32_t*) &m_rdbuf[12]);
+    kmp.DirSense = *((uint16_t*) &m_rdbuf[16]);
+    kmp.PresetVolt1 = *((int32_t*) &m_rdbuf[18]);
+    kmp.PresetVolt2 = *((int32_t*) &m_rdbuf[22]);
+    kmp.DispBrightness = *((uint16_t*) &m_rdbuf[26]);
+    kmp.DispTimeout = *((uint16_t*) &m_rdbuf[28]);
+    kmp.DispDimLevel = *((uint16_t*) &m_rdbuf[30]);
+
+    return 0;
+
+}
+
 
 inline
 void tmcController::ftdiErrmsg( const std::string & src,
