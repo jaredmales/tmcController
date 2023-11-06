@@ -99,9 +99,16 @@ int main( int argc,    ///< [in] the number of command line arguments, must be 2
     tios.dump(std::cout);
 
 
-    tmcc.mod_set_chanenablestate(0x01, tmcController::EnableState::enabled);
+    tmcc.mod_set_chanenablestate(0x01, tmcController::EnableState::disabled);
 
     mx::sys::milliSleep(500);
+
+    tmcController::EnableState ces;
+    tmcc.mod_req_chanenablestate(ces, 0x01);
+
+    std::cout << "enabled: " << (int) static_cast<uint8_t>(ces) << "\n";
+
+
 
     float ov;
     tmcc.pz_req_outputvolts(ov);

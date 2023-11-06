@@ -696,6 +696,8 @@ public:
     /** Sends the MGMSG_MOD_REQ_CHANENABLESTATE command (0x0211)
       * See page 47 of the APT Manual
       * 
+      * Note: KPZ101 will only return 0x01==enabled regardless of whether it is enabled or not.
+      * 
       * \returns 0 on succcess
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
@@ -926,16 +928,34 @@ void tmcController::vendor( uint16_t v )
     m_vendor = v;
 }
 
+inline
+uint16_t tmcController::vendor()
+{
+    return m_vendor;
+}
+
 inline   
 void tmcController::product( uint16_t p )
 {
     m_product = p;
 }
 
+inline   
+uint16_t tmcController::product()
+{
+    return m_product;
+}
+
 inline    
-void tmcController::serial (const std::string & s )
+void tmcController::serial(const std::string & s )
 {
     m_serial = s;
+}
+
+inline    
+std::string tmcController::serial()
+{
+    return m_serial;
 }
 
 inline
