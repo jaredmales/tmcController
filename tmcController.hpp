@@ -2,6 +2,25 @@
  *  \brief Declare and define the tmcController class
  */
 
+//***********************************************************************//
+// Copyright 2023 Jared R. Males (jaredmales@pm.me)
+//
+// This file is part of tmcController.
+//
+// tmcController is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// tmcController is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with mxlib.  If not, see <http://www.gnu.org/licenses/>.
+//***********************************************************************//
+
 #ifndef tmcController_hpp
 #define tmcController_hpp
 
@@ -184,7 +203,7 @@ public:
 
 ///@}
 
-/** \name Connection Management Data
+/** \name Connection Management
   * @{ 
   */
 
@@ -221,12 +240,6 @@ protected:
       */
     unsigned int m_chipid {0};
 
-///@}
-
-/** \name Connection Management
-  * @{ 
-  */
-
 public:
 
     /// Set the baud rate
@@ -259,7 +272,7 @@ public:
       */
     void postFlushSleep( uint32_t s /**< [in] the post-flush sleep time in ms */ );
 
-    /// Get the time to sleep in milliseconds before calling \ftdi_tcioflush
+    /// Get the time to sleep in milliseconds after calling \ftdi_tcioflush
     /** \see m_postFlushSleep
       * 
       */
@@ -375,11 +388,61 @@ public:
 
 ///@}
 
+/** \name Command Management
+  *
+  * Member data and functions to manage the sending of commands.
+  *  
+  * @{ 
+  */
+
+protected:
+
+    /// The total number of bytes read
+    /** Is set to 0 before a read attempt starts
+      * 
+      */
+    int m_totrd{0};
+
+    /// The time to sleep in milliseconds after changing the channel enable state
+    /** Used during \ref mod_set_chanenablestate().
+      * Default is 500 ms.  
+      */
+    uint32_t m_postChanEnableSleep {500};
+
+public:
+
+    /// Get the total number of bytes read.
+    /** \see m_totrd
+      * 
+      */
+    int totrd();
+
+    /// Set the time to sleep in milliseconds after changing channel enable state. 
+    /** \see m_postChanEnableSleep
+      * 
+      */
+    void postChanEnableSleep( uint32_t s /**< [in] the post sleep time in ms */ );
+    
+    /// Get the time to sleep in milliseconds after changing channel enable state.
+    /** \see m_postChanEnableSleep
+      * 
+      */
+    uint32_t postChanEnableSleep();
+
 /** \name Command Data Structures
+  *
+  * Data structures for sending commands to and receiving responses from the device.
+  *  
   * @{ 
   */
 
 public:
+
+    /// The enable states of a driver chanel
+    enum class EnableState : uint8_t{ invalid = 0x00, ///< For error detection only, not used by TMC
+                                      enabled = 0x01, ///< The channel is or will be enabled
+                                      disabled = 0x02 ///< The channel is or will be disabled
+                                    };
 
     /// Hardware information filled in by \ref hw_req_info
     struct HWInfo
@@ -512,14 +575,25 @@ public:
 
     };
 
+    /// Possible voltage limits for TPZ IO Settings
+    /** See page 224 of the manual
+      * 
+      */
+    enum class VoltLimit : uint16_t { INVALID = 0x00, ///< For error detection only, not used by TMC
+                                      V75 = 0x01,     ///< Voltage limit of 75 V
+                                      V100 = 0x02,    ///< Voltage limit of 100 V
+                                      V150 = 0x03     ///< Voltage limit of 150 V
+                                    };
+
     /// TPZ I/O Setting, filled in by \ref pz_req_tpz_iosettings 
-    /**
+    /** Used for the MGMSG_PZ_SET_TPZ_IOSETTINGS (0x07D4) and MGMSG_PZ_REQ_TPZ_IOSETTINGS (0x07D5) commands 
+      * See page 224 of the manual.
       * 
       */
     struct TPZIOSettings
-    {
-        uint16_t VoltageLimit {0x00};
-        uint16_t HubAnalogInput {0x00};
+    { 
+        VoltLimit VoltageLimit {VoltLimit::INVALID}; ///< The voltage limit
+        uint16_t HubAnalogInput {0x00};              ///< The hub feedback setup
 
         /// Dump details to a stream
         /**
@@ -574,18 +648,48 @@ public:
       * \returns 0 on succcess
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
-      * \returns -666 if device not available in either \ftdi_write_data 
+      * \returns -666 if device not available in \ftdi_write_data 
       */
     int mod_identify( bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure*/);
 
 
-    //pg 47
-    int mod_set_chanenablestate( const uint8_t & ces, ///< [in] the desired channel enable state. 0x01 enable, 0x02 disable
-                                 bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+    /// Enable or disable the specified drive channel 
+    /** Sends the MGMSG_MOD_SET_CHANENABLESTATE command (0x0210)
+      * See page 47 of the APT Manual
+      * 
+      * The KPZ101 sends a 10 byte reponse, after a delay, if this command changes the state.  This is undocumented in the manual.  
+      * To account for this, after sending the command, this sleeps for \ref m_postChanEnableSleep milliseconds (default 500) and then flushes
+      * the line with a read.  Nothing is done with the result, and it being 0 is not an error.
+      * 
+      * \returns 0 on succcess
+      * \returns <0 on error from connect
+      * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
+      * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
+      * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data
+      * \returns -700 if sleep throws an exception
+      * \returns -1000 if \p ces is EnableState::invalid
+      * 
+      */
+    int mod_set_chanenablestate( const uint8_t & chnum,   ///< [in] the channel number
+                                 const EnableState & ces, ///< [in] the desired channel enable state, EnableState::enabled or EnableState::disabled. 
+                                 bool errmsg = true       ///< [in] [optional] flag controlling if an error message is printed on failure
                                );
     
-    int mod_req_chanenablestate( uint8_t & ces,     ///< [out] the channel enable state. 0x01 enabled, 0x02 disabled
-                                 bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+    /// Request teh enable state of the specified drive channel
+    /** Sends the MGMSG_MOD_REQ_CHANENABLESTATE command (0x0211)
+      * See page 47 of the APT Manual
+      * 
+      * \returns 0 on succcess
+      * \returns <0 on error from connect
+      * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
+      * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
+      * \returns -300 if not enough data read
+      * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
+      * \returns -1000 if \p ces is EnableState::invalid
+      */
+    int mod_req_chanenablestate( EnableState & ces,     ///< [out] the channel enable state. 0x01 enabled, 0x02 disabled
+                                 const uint8_t & chnum, ///< [in] the channel number
+                                 bool errmsg = true     ///< [in] [optional] flag controlling if an error message is printed on failure
                                );
 
     /// Stop automatic status updates from the controller 
@@ -614,12 +718,33 @@ public:
                      bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
                    );
 
-    int pz_set_outputvolts( const int16_t & ov, ///< [in] the output volts to set, converted from a percentage of max value
+    /// Set the output voltage applied to the piezo actuator
+    /** Sends the MGMSG_PZ_SET_OUTPUTVOLTS command (0x0643).
+      * See page 198 of the manual.
+      *   
+      * \returns 0 on succcess
+      * \returns <0 on error from connect
+      * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
+      * \returns -666 if device not available in either \ftdi_write_data 
+      * \returns -980 if abs(ov) > 1
+      */
+    int pz_set_outputvolts( const float & ov, ///< [in] the output volts to set, converted from a percentage of max value
                             bool errmsg = true  ///< [in] [optional] flag controlling if an error message is printed on failure
                           );
     
-    int pz_req_outputvolts( int16_t & ov, ///< [out] the output volts currently set
-                            bool errmsg = true  ///< [in] [optional] flag controlling if an error message is printed on failure
+    /// Get the output voltage applied to the piezo actuator
+    /** Sends the MGMSG_PZ_REQ_OUTPUTVOLTS command (0x0644).
+      * See page 198 of the manual.
+      *   
+      * \returns 0 on succcess
+      * \returns <0 on error from connect
+      * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
+      * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
+      * \returns -300 if not enough data read
+      * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
+      */
+    int pz_req_outputvolts( float & ov,      ///< [out] the output volts currently set, converted to a percentage of maximum value
+                            bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
                           );
 
     /// Get Piezo status
@@ -667,11 +792,31 @@ public:
                                  bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
                                );
 
+    /// Set voltage limit and hub analog input
+    /** Sends the MGMSG_PZ_SET_TPZ_IOSETTINGS command (0x07D4) 
+      * See page 224 of the manual.
+      * 
+      * \returns 0 on succcess
+      * \returns <0 on error from connect
+      * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
+      * \returns -666 if device not available in either \ftdi_write_data 
+      */
     int pz_set_tpz_iosettings( const TPZIOSettings & tios, ///< [in] the \ref TPZIOSettings to set
                                 bool errmsg = true         ///< [in] [optional] flag controlling if an error message is printed on failure
                              );
 
 
+    /// Set voltage limit and hub analog input
+    /** Sends the MGMSG_PZ_REQ_TPZ_IOSETTINGS command (0x07D5) 
+      * See page 224 of the manual.
+      * 
+      * \returns 0 on succcess
+      * \returns <0 on error from connect
+      * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
+      * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
+      * \returns -300 if not enough data read
+      * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
+      */ 
     int pz_req_tpz_iosettings( TPZIOSettings & tios, ///< [out] the \ref TPZIOSettings to populate
                                bool errmsg = true    ///< [in] [optional] flag controlling if an error message is printed on failure
                              );
@@ -1032,6 +1177,24 @@ unsigned int tmcController::chipid()
     return m_chipid;
 }
 
+inline
+int tmcController::totrd()
+{
+    return m_totrd;
+}
+
+inline
+void tmcController::postChanEnableSleep( uint32_t s )
+{
+    m_postChanEnableSleep = s;
+}
+
+inline
+uint32_t tmcController::postChanEnableSleep()
+{
+    return m_postChanEnableSleep;
+}
+
 #define TMCC_CHECK_CONNECTED(fxn)                                                                \
     if(!m_connected)                                                                             \
     {                                                                                            \
@@ -1084,7 +1247,12 @@ template<class streamT>
 void tmcController::TPZIOSettings::dump(streamT & ios)
 {
     ios << "TPZ IO Settings: \n";
-    ios << "     VoltageLimit: " << VoltageLimit << "\n";
+    int vl;
+    if(VoltageLimit == VoltLimit::V75) vl = 75;
+    if(VoltageLimit == VoltLimit::V100) vl = 100;
+    if(VoltageLimit == VoltLimit::V150) vl = 150;
+
+    ios << "     VoltageLimit: " << vl << "\n";
     ios << "   HubAnalogInput: " << HubAnalogInput << "\n";
 }
 
@@ -1101,11 +1269,8 @@ void tmcController::KMMIParams::dump(streamT & ios)
     ios << "     DispBrightness: " << DispBrightness << "\n";
     ios << "        DispTimeout: " << DispTimeout << "\n";
     ios << "       DispDimLevel: " << DispDimLevel << "\n";
-
-
-
-
 }
+
 #define TMCC_SNDBUF_HEAD(b0,b1,b2,b3,b4,b5) \
     m_sndbuf[0] = b0;                       \
     m_sndbuf[1] = b1;                       \
@@ -1128,6 +1293,8 @@ void tmcController::KMMIParams::dump(streamT & ios)
 
 #define TMCC_WRITE_COMMAND(fxn, esz)                                                            \
     int rv;                                                                                     \
+    rv = ftdi_tcioflush(m_ftdi); \
+    std::this_thread::sleep_for(std::chrono::milliseconds(m_postFlushSleep));\
     if((rv = ftdi_write_data(m_ftdi, m_sndbuf, esz))  < 0)                                      \
     {                                                                                           \
         if(errmsg)                                                                              \
@@ -1141,28 +1308,29 @@ void tmcController::KMMIParams::dump(streamT & ios)
 #define TMCC_READ_RESPONSE(fxn, esz)                                                                           \
     {                                                                                                          \
         /** \todo this needs a timeout, and/or look for ftdi function to manage this*/                         \
-        int totrd = 0;                                                                                         \
-        while(totrd < esz)                                                                                     \
+        m_totrd = 0;                                                                                           \
+        do                                                                                                     \
         {                                                                                                      \
-            int rd = ftdi_read_data(m_ftdi, m_rdbuf + totrd, sizeof(m_rdbuf)-totrd);                           \
+            int rd = ftdi_read_data(m_ftdi, m_rdbuf + m_totrd, sizeof(m_rdbuf)-m_totrd);                       \
             if(rd < 0)                                                                                         \
             {                                                                                                  \
                 if(errmsg)                                                                                     \
                 {                                                                                              \
-                    ftdiErrmsg("tmcController::" fxn, "unable to read data", rv, __FILE__, __LINE__);          \
+                    ftdiErrmsg("tmcController::" fxn, "unable to read data", rd, __FILE__, __LINE__);          \
                 }                                                                                              \
-                if(rv == -666) return rv;                                                                      \
-                return -200+rv;                                                                                \
+                if(rd == -666) return rd;                                                                      \
+                return -200+rd;                                                                                \
             }                                                                                                  \
-            totrd += rd;                                                                                       \
+            m_totrd += rd;                                                                                     \
         }                                                                                                      \
+        while(m_totrd < esz);                                                                                  \
                                                                                                                \
-        if(totrd != esz)                                                                                        \
+        if(m_totrd != esz && esz > 0)                                                                          \
         {                                                                                                      \
             if(errmsg)                                                                                         \
             {                                                                                                  \
                 otherErrmsg("tmcController::" fxn, "did not read correct amount of data, got " +               \
-                                                                  std::to_string(totrd), __FILE__, __LINE__);  \
+                                                                  std::to_string(m_totrd), __FILE__, __LINE__);\
             }                                                                                                  \
             return -300;                                                                                       \
         }                                                                                                      \
@@ -1181,33 +1349,79 @@ int tmcController::mod_identify(bool errmsg /*default=true*/)
 }
 
 inline
-int tmcController::mod_set_chanenablestate( const uint8_t & ces,
+int tmcController::mod_set_chanenablestate( const uint8_t & chnum,
+                                            const EnableState & ces,
                                             bool errmsg
                                           )
 {
+    if(ces == EnableState::invalid)
+    {
+        if(errmsg)
+        {
+            otherErrmsg("tmcController::mod_set_chanenablestate", "EnableState is invalid", __FILE__, __LINE__-4);
+        }
+        return -1000;
+    }
+
     TMCC_CHECK_CONNECTED("mod_set_chanenablestate")
 
-    TMCC_SNDBUF_HEAD(0x10,0x02,0x01,ces,0x50,0x01)
+    TMCC_SNDBUF_HEAD(0x10,0x02,chnum,static_cast<uint8_t>(ces),0x50,0x01)
     
     TMCC_WRITE_REQUEST("mod_set_chanenablestate")
+
+    //Sleep to let the device send the undocumented 10 character response on a state change
+    try
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(m_postChanEnableSleep));
+    }
+    catch(const std::exception& e)
+    {
+        if(errmsg)
+        {
+            otherErrmsg("tmcController::mod_set_chanenablestate", std::string("exception from sleep_for: ") + e.what(), __FILE__, __LINE__-6);
+        }
+        return -700;
+    }
+
+    //Now do a 0 read to flush the line
+    TMCC_READ_RESPONSE("pz_set_outputvolts", 0) 
 
     return 0;
 }
 
 inline   
-int tmcController::mod_req_chanenablestate( uint8_t & ces,     
+int tmcController::mod_req_chanenablestate( EnableState & ces,
+                                            const uint8_t & chnum,     
                                             bool errmsg
                                           )
 {
     TMCC_CHECK_CONNECTED("mod_req_chanenablestate")
 
-    TMCC_SNDBUF_HEAD(0x11,0x02,0x01,0x00,0x50,0x01)
+    TMCC_SNDBUF_HEAD(0x11,0x02,chnum,0x00,0x50,0x01)
 
     TMCC_WRITE_REQUEST("mod_req_chanenablestate")
 
     TMCC_READ_RESPONSE("mod_req_chanenablestate", 6);
 
-    ces = m_rdbuf[3];
+    if(m_rdbuf[3] == 0x01)
+    {
+        ces = EnableState::enabled;
+    }
+    else if(m_rdbuf[3] == 0x02)
+    {
+        ces = EnableState::disabled;
+    }
+    else
+    {
+        ces = EnableState::invalid;
+        if(errmsg)
+        {
+            otherErrmsg("tmcController::mod_req_chanenablestate", "EnableState is invalid", __FILE__, __LINE__-5);
+        }
+        return -1000;
+    }
+
+    return 0;
 }
 
 inline
@@ -1254,17 +1468,37 @@ int tmcController::hw_req_info( HWInfo & hwi,
 }
 
 inline
-int tmcController::pz_set_outputvolts( const int16_t & ov, 
+int tmcController::pz_set_outputvolts( const float & ov, 
                                        bool errmsg
                                      )
 {
+    int16_t iov = 0x00;
+
+    if(fabs(ov) > 1.0)
+    {
+        if(errmsg)
+        {
+            otherErrmsg("tmcController::pz_set_outputvolts", "output volts > 1 (>100% of max): " + std::to_string(ov), __FILE__, __LINE__-2);
+        }
+        return -980;
+    }
+
+    if(ov > 0)
+    {
+        iov = ov*32767;
+    }
+    else
+    {
+        iov = ov*32768;
+    }
+
     TMCC_CHECK_CONNECTED("pz_set_outputvolts")
 
     TMCC_SNDBUF_HEAD(0x43,0x06,0x04,0x00, 0x50 | 0x80,0x01)
 
     m_sndbuf[6] = 0x01;
     m_sndbuf[7] = 0x00;
-    *((int16_t*) &m_sndbuf[8]) = ov;
+    *((int16_t*) &m_sndbuf[8]) = iov;
 
     TMCC_WRITE_COMMAND("pz_set_outputvolts",10)
 
@@ -1272,10 +1506,12 @@ int tmcController::pz_set_outputvolts( const int16_t & ov,
 }
 
 inline  
-int tmcController::pz_req_outputvolts( int16_t & ov, 
+int tmcController::pz_req_outputvolts( float & ov, 
                                        bool errmsg
                                      )
 {
+    
+
     TMCC_CHECK_CONNECTED("pz_req_outputvolts")
 
     TMCC_SNDBUF_HEAD(0x44,0x06,0x01,0x00,0x50,0x01)
@@ -1284,7 +1520,16 @@ int tmcController::pz_req_outputvolts( int16_t & ov,
 
     TMCC_READ_RESPONSE("pz_req_outputvolts", 10)
 
-    ov = *((int16_t *) &m_rdbuf[8]);
+    int16_t iov = *((int16_t *) &m_rdbuf[8]);
+
+    if(iov > 0)
+    {
+        ov = iov/32767.0;
+    }
+    else
+    {
+        ov = iov/32768.0;
+    }
 
     return 0;
 
@@ -1358,13 +1603,18 @@ int tmcController::pz_set_tpz_iosettings( const TPZIOSettings & tios,
                                           bool errmsg       
                                         )
 {
+    if(tios.VoltageLimit == VoltLimit::INVALID)
+    {
+        return -1000;
+    }
+
     TMCC_CHECK_CONNECTED("pz_set_tpz_iosettings")
 
     TMCC_SNDBUF_HEAD(0xD4,0x07,0x0A,0x00, 0x50 | 0x80,0x01)
 
     m_sndbuf[6] = 0x01;
     m_sndbuf[7] = 0x00;
-    *((uint16_t*) &m_sndbuf[8]) = tios.VoltageLimit;
+    *((uint16_t*) &m_sndbuf[8]) = static_cast<uint16_t>(tios.VoltageLimit);
     *((uint16_t*) &m_sndbuf[10]) = tios.HubAnalogInput;
     m_sndbuf[12] = 0x00;
     m_sndbuf[13] = 0x00;
@@ -1388,7 +1638,24 @@ int tmcController::pz_req_tpz_iosettings( TPZIOSettings & tios,
 
     TMCC_READ_RESPONSE("pz_req_tpz_iosettings", 16)
 
-    tios.VoltageLimit = *((uint16_t*) &m_rdbuf[8]);
+    uint16_t vl = *((uint16_t*) &m_rdbuf[8]);
+    if(vl == 0x01)
+    {
+        tios.VoltageLimit = VoltLimit::V75;
+    }
+    else if (vl == 0x02)
+    {
+        tios.VoltageLimit = VoltLimit::V100;
+    }
+    else if(vl == 0x03)
+    {
+        tios.VoltageLimit = VoltLimit::V150;
+    }
+    else
+    {
+        tios.VoltageLimit = VoltLimit::INVALID;
+    }
+
     tios.HubAnalogInput = *((uint16_t*) &m_rdbuf[10]);
 
     return 0;

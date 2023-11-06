@@ -17,6 +17,27 @@
   * You can find this with `dmesg`.
   * 
   */
+
+
+//***********************************************************************//
+// Copyright 2023 Jared R. Males (jaredmales@pm.me)
+//
+// This file is part of tmcController.
+//
+// tmcController is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// tmcController is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with mxlib.  If not, see <http://www.gnu.org/licenses/>.
+//***********************************************************************//
+
 #include <mx/sys/timeUtils.hpp>
 
 #include "tmcController.hpp"
@@ -70,7 +91,7 @@ int main( int argc,    ///< [in] the number of command line arguments, must be 2
     tmcc.pz_req_tpz_iosettings(tios);
     tios.dump(std::cout);
 
-    tios.VoltageLimit = 0x03;
+    tios.VoltageLimit = tmcController::VoltLimit::V150;
 
     tmcc.pz_set_tpz_iosettings(tios);
 
@@ -78,22 +99,25 @@ int main( int argc,    ///< [in] the number of command line arguments, must be 2
     tios.dump(std::cout);
 
 
-    tmcc.mod_set_chanenablestate(0x02);
+    tmcc.mod_set_chanenablestate(0x01, tmcController::EnableState::enabled);
 
-    int16_t ov;
+    mx::sys::milliSleep(500);
+
+    float ov;
     tmcc.pz_req_outputvolts(ov);
 
-    std::cout << "Output Volts: " << ov << "\n";
+    std::cout << "Output Volts: " << ov*150.0 << "\n";
 
-    ov = 0.0/150. * 32767;
+    ov = 75.0/150;
 
-    std::cerr << ov << "\n";
+    std::cerr << ov*150. << "\n";
     tmcc.pz_set_outputvolts(ov);
 
     mx::sys::milliSleep(500);
-    tmcc.pz_req_outputvolts(ov);
 
-    std::cout << "Output Volts: " << ov << "\n";
+    ov = 0;
+    tmcc.pz_req_outputvolts(ov);
+    std::cout << "Output Volts: " << ov*150 << "\n";
 
     return EXIT_SUCCESS;
 }
