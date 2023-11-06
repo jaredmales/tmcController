@@ -203,7 +203,7 @@ public:
 
 ///@}
 
-/** \name Connection Management
+/** \name Connection Management Data
   * @{ 
   */
 
@@ -239,6 +239,12 @@ protected:
       * See \ftdi_read_chipid
       */
     unsigned int m_chipid {0};
+
+///@}
+
+/** \name Connection Management
+  * @{ 
+  */
 
 public:
 
@@ -388,9 +394,9 @@ public:
 
 ///@}
 
-/** \name Command Management
+/** \name Command Management Data
   *
-  * Member data and functions to manage the sending of commands.
+  * Member data to manage the sending of commands.
   *  
   * @{ 
   */
@@ -408,6 +414,16 @@ protected:
       * Default is 500 ms.  
       */
     uint32_t m_postChanEnableSleep {500};
+
+///@}
+
+/** \name Command Management
+  *
+  * Functions to manage the sending of commands.
+  *  
+  * @{ 
+  */
+
 
 public:
 
@@ -428,6 +444,7 @@ public:
       * 
       */
     uint32_t postChanEnableSleep();
+
 
 /** \name Command Data Structures
   *
