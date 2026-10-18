@@ -24,7 +24,15 @@
 #ifndef tmcController_hpp
 #define tmcController_hpp
 
+/// API revision providing cancellable bounded I/O and idempotent connection cleanup.
+#define TMCC_IO_RECOVERY_VERSION 1
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <limits>
+#include <type_traits>
 #include <string>
 #include <iostream>
 #include <thread>
@@ -75,10 +83,16 @@ public:
     tmcController();
 
     /// Destructor
-    /** Allocates \ref m_ftdi by calling \ftdi_free
+    /** Releases \ref m_ftdi by calling \ftdi_free
       * 
       */
-    ~tmcController();
+    virtual ~tmcController();
+
+    /// FTDI contexts have unique ownership and cannot be copied.
+    tmcController( const tmcController &other /**< [in] Noncopyable source. */ ) = delete;
+
+    /// FTDI contexts have unique ownership and cannot be assigned.
+    tmcController &operator=( const tmcController &other /**< [in] Noncopyable source. */ ) = delete;
 
 ///@}
 
@@ -120,10 +134,10 @@ public:
 protected:
 
     ///Memory used for sending data to the device
-    unsigned char m_sndbuf[256];
+    unsigned char m_sndbuf[256]{};
 
     ///Memory used for reading data from the device
-    unsigned char m_rdbuf[256];
+    unsigned char m_rdbuf[256]{};
 
 ///@}
 
@@ -301,8 +315,8 @@ public:
       * 
       * \overload
       */
-    int open( const std::string & s, ///< [in] the USB serial number (see \ref m_serial)
-              bool errmsg = true     ///< [in] [optional] flag controlling if an error message is printed on failure
+    int open( const std::string & s /**< [in] the USB serial number (see \ref m_serial) */,
+              bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
             );
 
     /// Set the USB device identifiers and open the device.
@@ -310,10 +324,10 @@ public:
       * 
       * \overload
       */
-    int open( uint16_t v,            ///< [in] the USB vendor ID (see \ref m_vendor)
-              uint16_t p,            ///< [in] the USB product ID (see \ref m_product)
-              const std::string & s, ///< [in] the USB serial number (see \ref m_serial)
-              bool errmsg = true     ///< [in] [optional] flag controlling if an error message is printed on failure
+    int open( uint16_t v /**< [in] the USB vendor ID (see \ref m_vendor) */,
+              uint16_t p /**< [in] the USB product ID (see \ref m_product) */,
+              const std::string & s /**< [in] the USB serial number (see \ref m_serial) */,
+              bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
             );
 
     /// Close the device
@@ -360,8 +374,8 @@ public:
       * 
       * \overload
       */
-    int connect( const std::string & s, ///< [in] the USB serial number (see \ref m_serial)
-                 bool errmsg = true     ///< [in] [optional] flag controlling if an error message is printed on failure
+    int connect( const std::string & s /**< [in] the USB serial number (see \ref m_serial) */,
+                 bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                );
 
     /// Set the USB device identifiers and connect to the device.
@@ -369,23 +383,23 @@ public:
       * 
       * \overload
       */
-    int connect( uint16_t v,            ///< [in] the USB vendor ID 
-                 uint16_t p,            ///< [in] the USB product ID (see \ref m_product)
-                 const std::string & s, ///< [in] the USB serial number (see \ref m_serial)
-                 bool errmsg = true     ///< [in] [optional] flag controlling if an error message is printed on failure
+    int connect( uint16_t v /**< [in] the USB vendor ID */,
+                 uint16_t p /**< [in] the USB product ID (see \ref m_product) */,
+                 const std::string & s /**< [in] the USB serial number (see \ref m_serial) */,
+                 bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                );
 
     /// Get the value of the flag indicating whether or not the USB device is open.
     /**
       * \returns the true if open, false if not
       */
-    bool opened();
+    bool opened() const;
 
     /// Get the value of the flag indicating whether or not the TMC device is connected.
     /**
       * \returns the true if connected, false if not
       */
-    bool connected();
+    bool connected() const;
 
     /// Get the chip ID of the FTDI on the TMC device
     /** This is read and set during \ref connect().
@@ -408,6 +422,32 @@ protected:
       * 
       */
     int m_totrd{0};
+
+    /// Overall response deadline and individual USB control timeout, in milliseconds.
+    uint32_t m_ioTimeout{1000};
+
+    /// Pause in short slices, stopping promptly when communication is canceled.
+    int pause( uint32_t milliseconds /**< [in] Maximum pause duration. */ );
+
+    /// Write one complete message, optionally flushing command input first.
+    int writeMessage( int size /**< [in] Message length in m_sndbuf. */,
+                      bool flush /**< [in] Flush before the write. */,
+                      const char *source /**< [in] Diagnostic operation. */,
+                      bool errmsg /**< [in] Report errors. */ );
+
+    /// Read a complete, matching reply by a monotonic deadline, or drain once for size zero.
+    int readResponse( int size /**< [in] Expected reply length; zero means one drain read. */,
+                      const char *source /**< [in] Diagnostic operation. */,
+                      bool errmsg /**< [in] Report errors. */ );
+
+    /// Decode an unaligned little-endian integer without aliasing a byte buffer.
+    template<class valueT>
+    static valueT decode( const unsigned char *bytes /**< [in] sizeof(valueT) bytes. */ );
+
+    /// Encode a little-endian integer without unaligned stores.
+    template<class valueT>
+    static void encode( unsigned char *bytes /**< [out] sizeof(valueT) bytes. */,
+                        valueT value /**< [in] Integer to encode. */ );
 
     /// The time to sleep in milliseconds after changing the channel enable state
     /** Used during \ref mod_set_chanenablestate().
@@ -432,6 +472,16 @@ public:
       * 
       */
     int totrd();
+
+    /// Set the response deadline and USB timeout, clamped to 1..60000 milliseconds.
+    void ioTimeout( uint32_t milliseconds /**< [in] Maximum operation duration. */ );
+
+    /// Get the configured response deadline, in milliseconds.
+    uint32_t ioTimeout() const;
+
+    /// Allow a caller to cancel connection and command I/O without closing a handle concurrently.
+    /** Called between USB operations and during waits; overrides must be thread safe and nonblocking. */
+    virtual bool communicationAllowed() const;
 
     /// Set the time to sleep in milliseconds after changing channel enable state. 
     /** \see m_postChanEnableSleep
@@ -687,12 +737,12 @@ public:
       * \returns -1000 if \p ces is EnableState::invalid
       * 
       */
-    int mod_set_chanenablestate( const uint8_t & chnum,   ///< [in] the channel number
-                                 const EnableState & ces, ///< [in] the desired channel enable state, EnableState::enabled or EnableState::disabled. 
-                                 bool errmsg = true       ///< [in] [optional] flag controlling if an error message is printed on failure
+    int mod_set_chanenablestate( const uint8_t & chnum /**< [in] the channel number */,
+                                 const EnableState & ces /**< [in] the desired channel enable state, EnableState::enabled or EnableState::disabled. */,
+                                 bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                                );
     
-    /// Request teh enable state of the specified drive channel
+    /// Request the enable state of the specified drive channel
     /** Sends the MGMSG_MOD_REQ_CHANENABLESTATE command (0x0211)
       * See page 47 of the APT Manual
       * 
@@ -706,9 +756,9 @@ public:
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
       * \returns -1000 if \p ces is EnableState::invalid
       */
-    int mod_req_chanenablestate( EnableState & ces,     ///< [out] the channel enable state. 0x01 enabled, 0x02 disabled
-                                 const uint8_t & chnum, ///< [in] the channel number
-                                 bool errmsg = true     ///< [in] [optional] flag controlling if an error message is printed on failure
+    int mod_req_chanenablestate( EnableState & ces /**< [out] the channel enable state. 0x01 enabled, 0x02 disabled */,
+                                 const uint8_t & chnum /**< [in] the channel number */,
+                                 bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                                );
 
     /// Stop automatic status updates from the controller 
@@ -733,8 +783,8 @@ public:
       * \returns -300 if not enough data read
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
       */
-    int hw_req_info( HWInfo & hwi,      ///< [in] the \ref HWInfo structure to populate
-                     bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+    int hw_req_info( HWInfo & hwi /**< [in] the \ref HWInfo structure to populate */,
+                     bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                    );
 
     /// Set the output voltage applied to the piezo actuator
@@ -747,8 +797,8 @@ public:
       * \returns -666 if device not available in either \ftdi_write_data 
       * \returns -980 if abs(ov) > 1
       */
-    int pz_set_outputvolts( const float & ov, ///< [in] the output volts to set, converted from a percentage of max value
-                            bool errmsg = true  ///< [in] [optional] flag controlling if an error message is printed on failure
+    int pz_set_outputvolts( const float & ov /**< [in] the output volts to set, converted from a percentage of max value */,
+                            bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                           );
     
     /// Get the output voltage applied to the piezo actuator
@@ -762,8 +812,8 @@ public:
       * \returns -300 if not enough data read
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
       */
-    int pz_req_outputvolts( float & ov,      ///< [out] the output volts currently set, converted to a percentage of maximum value
-                            bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+    int pz_req_outputvolts( float & ov /**< [out] the output volts currently set, converted to a percentage of maximum value */,
+                            bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                           );
 
     /// Get Piezo status
@@ -779,8 +829,8 @@ public:
       * \returns -300 if not enough data read
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
       */
-    int pz_req_pzstatusupdate( PZStatus & pzs,    ///< [out] the \ref PZStatus structure to populate
-                               bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+    int pz_req_pzstatusupdate( PZStatus & pzs /**< [out] the \ref PZStatus structure to populate */,
+                               bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                              );
 
     /// Set the intensity of the LED display on the front of the TPZ unit
@@ -792,8 +842,8 @@ public:
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns -666 if device not available in either \ftdi_write_data 
       */
-    int pz_set_tpz_dispsettings( const uint16_t & dispint, ///< [in] The value to set.  Manual says 0-255.  Devices tested have a more limited range of XX to XX.
-                                 bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+    int pz_set_tpz_dispsettings( const uint16_t & dispint /**< [in] The value to set.  Manual says 0-255.  Devices tested have a more limited range of XX to XX. */,
+                                 bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                                );
 
     /// Get the intensity of the LED display on the front of the TPZ unit
@@ -807,8 +857,8 @@ public:
       * \returns -300 if not enough data read
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
       */  
-    int pz_req_tpz_dispsettings( uint16_t & dispint, ///< [out] the intensity value returned by the device.
-                                 bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+    int pz_req_tpz_dispsettings( uint16_t & dispint /**< [out] the intensity value returned by the device. */,
+                                 bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                                );
 
     /// Set voltage limit and hub analog input
@@ -820,12 +870,12 @@ public:
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns -666 if device not available in either \ftdi_write_data 
       */
-    int pz_set_tpz_iosettings( const TPZIOSettings & tios, ///< [in] the \ref TPZIOSettings to set
-                                bool errmsg = true         ///< [in] [optional] flag controlling if an error message is printed on failure
+    int pz_set_tpz_iosettings( const TPZIOSettings & tios /**< [in] the \ref TPZIOSettings to set */,
+                                bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                              );
 
 
-    /// Set voltage limit and hub analog input
+    /// Get voltage limit and hub analog input
     /** Sends the MGMSG_PZ_REQ_TPZ_IOSETTINGS command (0x07D5) 
       * See page 224 of the manual.
       * 
@@ -836,8 +886,8 @@ public:
       * \returns -300 if not enough data read
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
       */ 
-    int pz_req_tpz_iosettings( TPZIOSettings & tios, ///< [out] the \ref TPZIOSettings to populate
-                               bool errmsg = true    ///< [in] [optional] flag controlling if an error message is printed on failure
+    int pz_req_tpz_iosettings( TPZIOSettings & tios /**< [out] the \ref TPZIOSettings to populate */,
+                               bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                              );
 
     /// Set top panel wheel and display parameters
@@ -849,8 +899,8 @@ public:
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns -666 if device not available in either \ftdi_write_data  
       */
-    int kpz_set_kcubemmiparams( const KMMIParams & kmp, ///< [in] the \ref KMMIParams to set
-                                bool errmsg = true      ///< [in] [optional] flag controlling if an error message is printed on failure
+    int kpz_set_kcubemmiparams( const KMMIParams & kmp /**< [in] the \ref KMMIParams to set */,
+                                bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                               );
 
     /// Get top panel wheel and display parameters
@@ -864,8 +914,8 @@ public:
       * \returns -300 if not enough data read
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
       */
-    int kpz_req_kcubemmiparams( KMMIParams & kmp,  ///< [out] the \ref KMMIParams structure to populate
-                                bool errmsg = true ///< [in] [optional] flag controlling if an error message is printed on failure
+    int kpz_req_kcubemmiparams( KMMIParams & kmp /**< [out] the \ref KMMIParams structure to populate */,
+                                bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                               );
 
 
@@ -880,20 +930,20 @@ public:
     /// Print a message to std::cerr describing an error from an \libftdi1 function
     /** Intended to be overriden in a derived class to provide custom error messaging.
       */
-    virtual void ftdiErrmsg( const std::string & src,  ///< [in] The source of the error (the tmcController function)
-                             const std::string & msg,  ///< [in] The message describing the error
-                             int rv,                   ///< [in] The return value of the \libftdi1 function
-                             const std::string & file, ///< [in] The file name of this file
-                             int line                  ///< [in] The line number at which the error was recorded
+    virtual void ftdiErrmsg( const std::string & src /**< [in] The source of the error (the tmcController function) */,
+                             const std::string & msg /**< [in] The message describing the error */,
+                             int rv /**< [in] The return value of the \libftdi1 function */,
+                             const std::string & file /**< [in] The file name of this file */,
+                             int line /**< [in] The line number at which the error was recorded */
                            );
 
     /// Print a message to std::cerr describing an error 
     /** Intended to be overriden in a derived class to provide custom error messaging.
       */
-    virtual void otherErrmsg( const std::string & src,  ///< [in] The source of the error (the tmcController function)
-                              const std::string & msg,  ///< [in] The message describing the error
-                              const std::string & file, ///< [in] The file name of this file
-                              int line                  ///< [in] The line number at which the error was recorded
+    virtual void otherErrmsg( const std::string & src /**< [in] The source of the error (the tmcController function) */,
+                              const std::string & msg /**< [in] The message describing the error */,
+                              const std::string & file /**< [in] The file name of this file */,
+                              int line /**< [in] The line number at which the error was recorded */
                             );
 
  ///@}                   
@@ -906,13 +956,13 @@ tmcController::tmcController()
 {
     m_ftdi = ftdi_new();
 
-    ///\todo throw on failure
+    // open() reports allocation failure without dereferencing a null context.
 }
 
 inline
 tmcController::~tmcController()
 {
-    close();
+    close( false );
     ftdi_free(m_ftdi);
 }
 
@@ -925,6 +975,7 @@ const ftdi_context * tmcController::ftdi() const
 inline
 void tmcController::vendor( uint16_t v )
 {
+    if( m_vendor != v ) close( false );
     m_vendor = v;
 }
 
@@ -937,6 +988,7 @@ uint16_t tmcController::vendor()
 inline   
 void tmcController::product( uint16_t p )
 {
+    if( m_product != p ) close( false );
     m_product = p;
 }
 
@@ -949,6 +1001,7 @@ uint16_t tmcController::product()
 inline    
 void tmcController::serial(const std::string & s )
 {
+    if( m_serial != s ) close( false );
     m_serial = s;
 }
 
@@ -997,22 +1050,28 @@ uint32_t tmcController::postFlushSleep()
 inline
 int tmcController::open(bool errmsg /*default=true*/)
 {
-    int rv;
-
-    if((rv = ftdi_usb_open_desc_index(m_ftdi, m_vendor, m_product, NULL, m_serial.c_str(), 0)) < 0)
+    if( !communicationAllowed() )
+        return -666;
+    if( !m_ftdi )
+        return -11;
+    if( m_opened )
+        return 0;
+    m_connected = false;
+    ioTimeout( m_ioTimeout );
+    int rv = ftdi_usb_open_desc_index( m_ftdi, m_vendor, m_product, nullptr, m_serial.c_str(), 0 );
+    if( rv < 0 )
     {
-        if(errmsg)
-        {
-            ftdiErrmsg("tmcController::open", "unable to open ftdi device", rv, __FILE__, __LINE__-4);
-        }
-
-        m_opened = false;
-
+        if( errmsg )
+            ftdiErrmsg( "tmcController::open", "unable to open FTDI device", rv, __FILE__, __LINE__ );
+        close( false );
         return rv;
     }
-
     m_opened = true;
-
+    if( !communicationAllowed() )
+    {
+        close( false );
+        return -666;
+    }
     return 0;
 }
 
@@ -1041,136 +1100,150 @@ int tmcController::open( uint16_t v,
 inline
 int tmcController::close( bool errmsg /*default=true*/)
 {
-    if(!m_opened) 
-    {
+    // libftdi releases the handle even when interface release fails. Never retain usable flags.
+    m_opened = m_connected = false;
+    if( !m_ftdi || !m_ftdi->usb_dev )
         return 0;
-    }
-
-    int rv;
-    if((rv = ftdi_usb_close(m_ftdi)) < 0)
-    {
-        if(errmsg)
-        {
-            ftdiErrmsg("tmcController::close", "unable to close device", rv, __FILE__, __LINE__-4);
-        }
-        return rv;
-    }
-
-    m_opened = false;
-    m_connected = false;
-
-    return 0;
+    int rv = ftdi_usb_close( m_ftdi );
+    if( rv < 0 && errmsg )
+        otherErrmsg( "tmcController::close", "USB interface release failed: " + std::to_string( rv ), __FILE__, __LINE__ );
+    return rv;
 }
 
 inline
 int tmcController::connect(bool errmsg /*default=true*/)
 {
-    if(!m_opened)
+    m_connected = false;
+    int rv = open( errmsg );
+    if( rv < 0 )
     {
-        int rv = open();
-        if( (rv < 0) || !m_opened)
-        {
-            if(errmsg)
-            {
-                ftdiErrmsg("tmcController::connect", "open failed", rv, __FILE__, __LINE__-5);
-            }
-            return rv;
-        }
+        close( false );
+        return rv;
     }
-
-    int rv;
-    if((rv = ftdi_read_chipid(m_ftdi, &m_chipid)) < 0)
+    ioTimeout( m_ioTimeout );
+    if( !communicationAllowed() )
     {
-        if(errmsg)
-        {
-            ftdiErrmsg("tmcController::connect", "unable to read chip id", rv, __FILE__, __LINE__-4);
-        }
-        return -20 + rv;
+        close( false );
+        return -666;
     }
-
-    if((rv = ftdi_set_baudrate(m_ftdi, m_baud)) < 0)
+    rv = ftdi_read_chipid( m_ftdi, &m_chipid );
+    if( rv < 0 )
     {
-        if(errmsg)
-        {
-            ftdiErrmsg("tmcController::connect", "unable to set baud rate", rv, __FILE__, __LINE__-4);
-        }
-        return -30 + rv;
+        if( errmsg && rv != -666 )
+            ftdiErrmsg( "tmcController::connect", "unable to read chip ID", rv, __FILE__, __LINE__ );
+        close( false );
+        return rv == -666 ? rv : -20 + rv;
     }
-
-    if((rv = ftdi_set_line_property(m_ftdi, BITS_8, STOP_BIT_1, NONE)) < 0)
+    if( !communicationAllowed() )
     {
-        if(errmsg)
-        {
-            ftdiErrmsg("tmcController::connect", "unable to set line property", rv, __FILE__, __LINE__-4);
-        }
-        return -40 + rv;
+        close( false );
+        return -666;
     }
-
-    try
+    rv = ftdi_set_baudrate( m_ftdi, m_baud );
+    if( rv < 0 )
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(m_preFlushSleep));
+        if( errmsg && rv != -666 )
+            ftdiErrmsg( "tmcController::connect", "unable to set baud rate", rv, __FILE__, __LINE__ );
+        close( false );
+        return rv == -666 ? rv : -30 + rv;
     }
-    catch(const std::exception& e)
+    if( !communicationAllowed() )
     {
-        if(errmsg)
-        {
-            otherErrmsg("tmcController::connect", std::string("exception from sleep_for: ") + e.what(), __FILE__, __LINE__-6);
-        }
-        return -49;
+        close( false );
+        return -666;
     }
-
-    if((rv = ftdi_tcioflush(m_ftdi)) < 0)
+    rv = ftdi_set_line_property( m_ftdi, BITS_8, STOP_BIT_1, NONE );
+    if( rv < 0 )
     {
-        if(errmsg)
-        {
-            ftdiErrmsg("tmcController::connect", "unable to tcio flush", rv, __FILE__, __LINE__-4);
-        }
-        return -50 + rv;
+        if( errmsg && rv != -666 )
+            ftdiErrmsg( "tmcController::connect", "unable to set line properties", rv, __FILE__, __LINE__ );
+        close( false );
+        return rv == -666 ? rv : -40 + rv;
     }
-
-    try
+    if( !communicationAllowed() )
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(m_postFlushSleep));
+        close( false );
+        return -666;
     }
-    catch(const std::exception& e)
+    rv = pause( m_preFlushSleep );
+    if( rv < 0 )
     {
-        if(errmsg)
-        {
-            otherErrmsg("tmcController::connect", std::string("exception from sleep_for: ") + e.what(), __FILE__, __LINE__-6);
-        }
-        return -59;
+        if( errmsg && rv != -666 )
+            ftdiErrmsg( "tmcController::connect", "unable to wait before flush", rv, __FILE__, __LINE__ );
+        close( false );
+        return rv == -666 ? rv : 0 + rv;
     }
-
-    if((rv = ftdi_usb_reset(m_ftdi)) < 0)
+    if( !communicationAllowed() )
     {
-        if(errmsg)
-        {
-            ftdiErrmsg("tmcController::connect", "unable to reset device", rv, __FILE__, __LINE__-4);
-        }
-        return -60 + rv;
+        close( false );
+        return -666;
     }
-
-    if((rv = ftdi_setflowctrl(m_ftdi, SIO_RTS_CTS_HS)) < 0)
+    rv = ftdi_tcioflush( m_ftdi );
+    if( rv < 0 )
     {
-        if(errmsg)
-        {
-            ftdiErrmsg("tmcController::connect", "unable to set flow control", rv, __FILE__, __LINE__-4);
-        }
-        return -70 + rv;
+        if( errmsg && rv != -666 )
+            ftdiErrmsg( "tmcController::connect", "unable to flush", rv, __FILE__, __LINE__ );
+        close( false );
+        return rv == -666 ? rv : -50 + rv;
     }
-
-
-    if((rv = ftdi_setrts(m_ftdi, 1)) < 0 )
+    if( !communicationAllowed() )
     {
-        if(errmsg)
-        {
-            ftdiErrmsg("tmcController::connect", "unable to set RTS", rv, __FILE__, __LINE__-4);
-        }
-        return -80 + rv;
+        close( false );
+        return -666;
     }
-
+    rv = pause( m_postFlushSleep );
+    if( rv < 0 )
+    {
+        if( errmsg && rv != -666 )
+            ftdiErrmsg( "tmcController::connect", "unable to wait after flush", rv, __FILE__, __LINE__ );
+        close( false );
+        return rv == -666 ? rv : 0 + rv;
+    }
+    if( !communicationAllowed() )
+    {
+        close( false );
+        return -666;
+    }
+    rv = ftdi_usb_reset( m_ftdi );
+    if( rv < 0 )
+    {
+        if( errmsg && rv != -666 )
+            ftdiErrmsg( "tmcController::connect", "unable to reset USB", rv, __FILE__, __LINE__ );
+        close( false );
+        return rv == -666 ? rv : -60 + rv;
+    }
+    if( !communicationAllowed() )
+    {
+        close( false );
+        return -666;
+    }
+    rv = ftdi_setflowctrl( m_ftdi, SIO_RTS_CTS_HS );
+    if( rv < 0 )
+    {
+        if( errmsg && rv != -666 )
+            ftdiErrmsg( "tmcController::connect", "unable to set flow control", rv, __FILE__, __LINE__ );
+        close( false );
+        return rv == -666 ? rv : -70 + rv;
+    }
+    if( !communicationAllowed() )
+    {
+        close( false );
+        return -666;
+    }
+    rv = ftdi_setrts( m_ftdi, 1 );
+    if( rv < 0 )
+    {
+        if( errmsg && rv != -666 )
+            ftdiErrmsg( "tmcController::connect", "unable to set RTS", rv, __FILE__, __LINE__ );
+        close( false );
+        return rv == -666 ? rv : -80 + rv;
+    }
+    if( !communicationAllowed() )
+    {
+        close( false );
+        return -666;
+    }
     m_connected = true;
-
     return 0;
 }
 
@@ -1197,13 +1270,13 @@ int tmcController::connect( uint16_t v,
 }
 
 inline
-bool tmcController::opened()
+bool tmcController::opened() const
 {
     return m_opened;
 }
 
 inline
-bool tmcController::connected()
+bool tmcController::connected() const
 {
     return m_connected;
 }
@@ -1232,19 +1305,9 @@ uint32_t tmcController::postChanEnableSleep()
     return m_postChanEnableSleep;
 }
 
-#define TMCC_CHECK_CONNECTED(fxn)                                                                \
-    if(!m_connected)                                                                             \
-    {                                                                                            \
-        int rv = connect(errmsg);                                                                \
-        if( (rv < 0) || !m_connected)                                                            \
-        {                                                                                        \
-            if(errmsg)                                                                           \
-            {                                                                                    \
-                otherErrmsg("tmcController::" fxn, "connect failed", __FILE__, __LINE__);        \
-            }                                                                                    \
-            return rv;                                                                           \
-        }                                                                                        \
-    }             
+#define TMCC_CHECK_CONNECTED(fxn) \
+    if( !communicationAllowed() ) return -666; \
+    if( !m_connected ) { int result = connect( errmsg ); if( result < 0 ) return result; }
 
 template<class streamT>
 void tmcController::HWInfo::dump(streamT & ios)
@@ -1259,7 +1322,7 @@ void tmcController::HWInfo::dump(streamT & ios)
     ios << "   F/W Ver.: " << fwMaj << "." << fwMin << "." << fwInt << "\n";
 }
 
-double tmcController::PZStatus::age()
+inline double tmcController::PZStatus::age()
 {
   timespec tsp;
   clock_gettime(CLOCK_REALTIME, &tsp);
@@ -1284,7 +1347,7 @@ template<class streamT>
 void tmcController::TPZIOSettings::dump(streamT & ios)
 {
     ios << "TPZ IO Settings: \n";
-    int vl;
+    int vl = 0;
     if(VoltageLimit == VoltLimit::V75) vl = 75;
     if(VoltageLimit == VoltLimit::V100) vl = 100;
     if(VoltageLimit == VoltLimit::V150) vl = 150;
@@ -1316,62 +1379,153 @@ void tmcController::KMMIParams::dump(streamT & ios)
     m_sndbuf[4] = b4;                       \
     m_sndbuf[5] = b5;
 
-#define TMCC_WRITE_REQUEST(fxn)                                                                 \
-    int rv;                                                                                     \
-    if((rv = ftdi_write_data(m_ftdi, m_sndbuf, 6))  < 0)                                        \
-    {                                                                                           \
-        if(errmsg)                                                                              \
-        {                                                                                       \
-            ftdiErrmsg("tmcController::" fxn, "unable to write data", rv, __FILE__, __LINE__);  \
-        }                                                                                       \
-        if(rv == -666) return rv;                                                               \
-        else return -100 + rv;                                                                  \
-    } 
+#define TMCC_WRITE_REQUEST(fxn) \
+    { int result = writeMessage( 6, false, "tmcController::" fxn, errmsg ); if( result < 0 ) return result; }
 
-#define TMCC_WRITE_COMMAND(fxn, esz)                                                            \
-    int rv;                                                                                     \
-    rv = ftdi_tcioflush(m_ftdi); \
-    std::this_thread::sleep_for(std::chrono::milliseconds(m_postFlushSleep));\
-    if((rv = ftdi_write_data(m_ftdi, m_sndbuf, esz))  < 0)                                      \
-    {                                                                                           \
-        if(errmsg)                                                                              \
-        {                                                                                       \
-            ftdiErrmsg("tmcController::" fxn, "unable to write data", rv, __FILE__, __LINE__);  \
-        }                                                                                       \
-        if(rv == -666) return rv;                                                               \
-        else return -100 + rv;                                                                  \
+#define TMCC_WRITE_COMMAND(fxn, size) \
+    { int result = writeMessage( size, true, "tmcController::" fxn, errmsg ); if( result < 0 ) return result; }
+
+#define TMCC_READ_RESPONSE(fxn, size) \
+    { int result = readResponse( size, "tmcController::" fxn, errmsg ); if( result < 0 ) return result; }
+
+inline void tmcController::ioTimeout( uint32_t milliseconds )
+{
+    m_ioTimeout = std::max( uint32_t(1), std::min( milliseconds, uint32_t(60000) ) );
+    if( m_ftdi )
+        m_ftdi->usb_read_timeout = m_ftdi->usb_write_timeout = m_ioTimeout;
+}
+
+inline uint32_t tmcController::ioTimeout() const
+{
+    return m_ioTimeout;
+}
+
+inline bool tmcController::communicationAllowed() const
+{
+    return true;
+}
+
+inline int tmcController::pause( uint32_t milliseconds )
+{
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds( milliseconds );
+    while( std::chrono::steady_clock::now() < deadline )
+    {
+        if( !communicationAllowed() )
+            return -666;
+        std::this_thread::sleep_until( std::min( deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(10) ) );
     }
+    return communicationAllowed() ? 0 : -666;
+}
 
-#define TMCC_READ_RESPONSE(fxn, esz)                                                                           \
-    {                                                                                                          \
-        /** \todo this needs a timeout, and/or look for ftdi function to manage this*/                         \
-        m_totrd = 0;                                                                                           \
-        do                                                                                                     \
-        {                                                                                                      \
-            int rd = ftdi_read_data(m_ftdi, m_rdbuf + m_totrd, sizeof(m_rdbuf)-m_totrd);                       \
-            if(rd < 0)                                                                                         \
-            {                                                                                                  \
-                if(errmsg)                                                                                     \
-                {                                                                                              \
-                    ftdiErrmsg("tmcController::" fxn, "unable to read data", rd, __FILE__, __LINE__);          \
-                }                                                                                              \
-                if(rd == -666) return rd;                                                                      \
-                return -200+rd;                                                                                \
-            }                                                                                                  \
-            m_totrd += rd;                                                                                     \
-        }                                                                                                      \
-        while(m_totrd < esz);                                                                                  \
-                                                                                                               \
-        if(m_totrd != esz && esz > 0)                                                                          \
-        {                                                                                                      \
-            if(errmsg)                                                                                         \
-            {                                                                                                  \
-                otherErrmsg("tmcController::" fxn, "did not read correct amount of data, got " +               \
-                                                                  std::to_string(m_totrd), __FILE__, __LINE__);\
-            }                                                                                                  \
-            return -300;                                                                                       \
-        }                                                                                                      \
-    } /*TMCC_READ_RESPONSE(fxn, esz)*/
+inline int tmcController::writeMessage( int size, bool flush, const char *source, bool errmsg )
+{
+    if( !communicationAllowed() )
+        return -666;
+    if( !m_ftdi || !m_opened || !m_connected || !m_ftdi->usb_dev )
+        return -666;
+    if( flush )
+    {
+        int rv = ftdi_tcioflush( m_ftdi );
+        if( rv < 0 )
+        {
+            if( errmsg )
+                ftdiErrmsg( source, "unable to flush data", rv, __FILE__, __LINE__ );
+            return -400 + rv;
+        }
+        if( pause( m_postFlushSleep ) < 0 )
+            return -666;
+    }
+    if( !communicationAllowed() )
+        return -666;
+    m_ftdi->usb_write_timeout = m_ioTimeout;
+    int rv = ftdi_write_data( m_ftdi, m_sndbuf, size );
+    if( !communicationAllowed() )
+        return -666;
+    if( rv < 0 )
+    {
+        if( errmsg )
+            ftdiErrmsg( source, "unable to write data", rv, __FILE__, __LINE__ );
+        return rv == -666 ? rv : -100 + rv;
+    }
+    if( rv != size )
+    {
+        if( errmsg )
+            otherErrmsg( source, "incomplete write", __FILE__, __LINE__ );
+        return -301;
+    }
+    return 0;
+}
+
+inline int tmcController::readResponse( int size, const char *source, bool errmsg )
+{
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds( m_ioTimeout );
+    m_totrd = 0;
+    do
+    {
+        if( !communicationAllowed() || !m_ftdi || !m_ftdi->usb_dev )
+            return -666;
+        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>( deadline - std::chrono::steady_clock::now() ).count();
+        if( remaining <= 0 )
+        {
+            if( errmsg )
+                otherErrmsg( source, "response deadline expired", __FILE__, __LINE__ );
+            return -300;
+        }
+        m_ftdi->usb_read_timeout = std::min( remaining, decltype(remaining)(100) );
+        int rd = ftdi_read_data( m_ftdi, m_rdbuf + m_totrd, size ? size - m_totrd : sizeof(m_rdbuf) );
+        if( !communicationAllowed() )
+            return -666;
+        if( rd < 0 )
+        {
+            if( errmsg )
+                ftdiErrmsg( source, "unable to read data", rd, __FILE__, __LINE__ );
+            return rd == -666 ? rd : -200 + rd;
+        }
+        m_totrd += rd;
+        if( size == 0 )
+            return 0;
+        if( rd == 0 && pause(1) < 0 )
+            return -666;
+    } while( m_totrd < size );
+    // All supported requests expect the next APT message ID. Long replies include a payload length.
+    bool longReply = size > 6;
+    if( decode<uint16_t>( m_rdbuf ) != static_cast<uint16_t>( decode<uint16_t>( m_sndbuf ) + 1 ) ||
+        m_rdbuf[4] != ( longReply ? 0x81 : 0x01 ) || m_rdbuf[5] != 0x50 ||
+        ( longReply && decode<uint16_t>( m_rdbuf + 2 ) != size - 6 ) )
+    {
+        if( errmsg )
+            otherErrmsg( source, "unexpected response header", __FILE__, __LINE__ );
+        return -302;
+    }
+    if( decode<uint16_t>( m_sndbuf ) != 0x0005 && decode<uint16_t>( m_sndbuf ) != 0x07D2 &&
+        ( longReply ? decode<uint16_t>( m_rdbuf + 6 ) != 1 : m_rdbuf[2] != m_sndbuf[2] ) )
+    {
+        if( errmsg )
+            otherErrmsg( source, "unexpected response channel", __FILE__, __LINE__ );
+        return -302;
+    }
+    return 0;
+}
+
+template<class valueT>
+valueT tmcController::decode( const unsigned char *bytes )
+{
+    using unsignedT = typename std::make_unsigned<valueT>::type;
+    unsignedT value = 0;
+    for( size_t n = 0; n < sizeof(valueT); ++n )
+        value |= static_cast<unsignedT>( bytes[n] ) << (8*n);
+    valueT result;
+    std::memcpy( &result, &value, sizeof(result) );
+    return result;
+}
+
+template<class valueT>
+void tmcController::encode( unsigned char *bytes, valueT value )
+{
+    using unsignedT = typename std::make_unsigned<valueT>::type;
+    for( size_t n = 0; n < sizeof(valueT); ++n )
+        bytes[n] = static_cast<unsignedT>( value ) >> (8*n);
+}
 
 inline
 int tmcController::mod_identify(bool errmsg /*default=true*/)
@@ -1406,22 +1560,12 @@ int tmcController::mod_set_chanenablestate( const uint8_t & chnum,
     
     TMCC_WRITE_REQUEST("mod_set_chanenablestate")
 
-    //Sleep to let the device send the undocumented 10 character response on a state change
-    try
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(m_postChanEnableSleep));
-    }
-    catch(const std::exception& e)
-    {
-        if(errmsg)
-        {
-            otherErrmsg("tmcController::mod_set_chanenablestate", std::string("exception from sleep_for: ") + e.what(), __FILE__, __LINE__-6);
-        }
-        return -700;
-    }
+    // The device sends an undocumented reply after a channel-state change.
+    if( pause( m_postChanEnableSleep ) < 0 )
+        return -666;
 
     //Now do a 0 read to flush the line
-    TMCC_READ_RESPONSE("pz_set_outputvolts", 0) 
+    TMCC_READ_RESPONSE("mod_set_chanenablestate", 0)
 
     return 0;
 }
@@ -1486,19 +1630,19 @@ int tmcController::hw_req_info( HWInfo & hwi,
 
     TMCC_READ_RESPONSE("hw_req_info", 90);
 
-    hwi.serialNumber = *((uint32_t*)&m_rdbuf[6]);
+    hwi.serialNumber = decode<uint32_t>( m_rdbuf + 6 );
     char modnum[9];
     memcpy(modnum, &m_rdbuf[10], 8);
     modnum[8] = '\0';
     hwi.modelNumber = modnum;
 
-    hwi.type = *((uint16_t*)&m_rdbuf[18]);
+    hwi.type = decode<uint16_t>( m_rdbuf + 18 );
     hwi.fwMin  = m_rdbuf[20];
     hwi.fwInt = m_rdbuf[21];
     hwi.fwMaj = m_rdbuf[22];
-    hwi.hwVer = *((uint16_t*)&m_rdbuf[84]);
-    hwi.hwMod = *((uint16_t*)&m_rdbuf[86]);
-    hwi.nChannels = *((uint16_t*)&m_rdbuf[88]);
+    hwi.hwVer = decode<uint16_t>( m_rdbuf + 84 );
+    hwi.hwMod = decode<uint16_t>( m_rdbuf + 86 );
+    hwi.nChannels = decode<uint16_t>( m_rdbuf + 88 );
 
     return 0;
 
@@ -1511,7 +1655,12 @@ int tmcController::pz_set_outputvolts( const float & ov,
 {
     int16_t iov = 0x00;
 
-    if(fabs(ov) > 1.0)
+    // Bit inspection remains valid when callers compile with finite-math-only optimization.
+    static_assert( sizeof(float) == sizeof(uint32_t) && std::numeric_limits<float>::is_iec559,
+                   "APT voltage encoding requires IEEE-754 binary32" );
+    uint32_t bits;
+    std::memcpy( &bits, &ov, sizeof(bits) );
+    if( (bits & 0x7f800000U) == 0x7f800000U || ov < -1.0f || ov > 1.0f )
     {
         if(errmsg)
         {
@@ -1535,7 +1684,7 @@ int tmcController::pz_set_outputvolts( const float & ov,
 
     m_sndbuf[6] = 0x01;
     m_sndbuf[7] = 0x00;
-    *((int16_t*) &m_sndbuf[8]) = iov;
+    encode<int16_t>( m_sndbuf + 8, iov );
 
     TMCC_WRITE_COMMAND("pz_set_outputvolts",10)
 
@@ -1557,7 +1706,7 @@ int tmcController::pz_req_outputvolts( float & ov,
 
     TMCC_READ_RESPONSE("pz_req_outputvolts", 10)
 
-    int16_t iov = *((int16_t *) &m_rdbuf[8]);
+    int16_t iov = decode<int16_t>( m_rdbuf + 8 );
 
     if(iov > 0)
     {
@@ -1587,10 +1736,10 @@ int tmcController::pz_req_pzstatusupdate( PZStatus & pzs,
 
     clock_gettime(CLOCK_REALTIME, &pzs.statusTime);
 
-    pzs.voltage = *((int16_t *) &m_rdbuf[8]);
-    pzs.position = *((int16_t *) &m_rdbuf[10]);
+    pzs.voltage = decode<int16_t>( m_rdbuf + 8 );
+    pzs.position = decode<int16_t>( m_rdbuf + 10 );
 
-    uint32_t bits = *((uint32_t *) &m_rdbuf[12]);
+    uint32_t bits = decode<uint32_t>( m_rdbuf + 12 );
 
     pzs.connected = bits & 0x00000001;
     pzs.zeroed = bits & 0x00000010;
@@ -1611,7 +1760,7 @@ int tmcController::pz_set_tpz_dispsettings( const uint16_t & dispint,
 
     TMCC_SNDBUF_HEAD(0xD1,0x07,0x02,0x00, 0x50 | 0x80,0x01)
 
-    *((uint16_t*) &m_sndbuf[6]) = dispint;
+    encode<uint16_t>( m_sndbuf + 6, dispint );
 
     TMCC_WRITE_COMMAND("pz_set_tpz_dispsettings",8)
 
@@ -1631,11 +1780,12 @@ int tmcController::pz_req_tpz_dispsettings( uint16_t & dispint,
 
     TMCC_READ_RESPONSE("pz_req_tpz_dispsettings", 8)
 
-    dispint = *((uint16_t *) &m_rdbuf[6]);
+    dispint = decode<uint16_t>( m_rdbuf + 6 );
 
     return 0;
 }
 
+inline
 int tmcController::pz_set_tpz_iosettings( const TPZIOSettings & tios,
                                           bool errmsg       
                                         )
@@ -1651,8 +1801,8 @@ int tmcController::pz_set_tpz_iosettings( const TPZIOSettings & tios,
 
     m_sndbuf[6] = 0x01;
     m_sndbuf[7] = 0x00;
-    *((uint16_t*) &m_sndbuf[8]) = static_cast<uint16_t>(tios.VoltageLimit);
-    *((uint16_t*) &m_sndbuf[10]) = tios.HubAnalogInput;
+    encode<uint16_t>( m_sndbuf + 8, static_cast<uint16_t>(tios.VoltageLimit) );
+    encode<uint16_t>( m_sndbuf + 10, tios.HubAnalogInput );
     m_sndbuf[12] = 0x00;
     m_sndbuf[13] = 0x00;
     m_sndbuf[14] = 0x00;
@@ -1663,6 +1813,7 @@ int tmcController::pz_set_tpz_iosettings( const TPZIOSettings & tios,
     return 0;
 }
 
+inline
 int tmcController::pz_req_tpz_iosettings( TPZIOSettings & tios, 
                                           bool errmsg   
                                         )
@@ -1675,7 +1826,7 @@ int tmcController::pz_req_tpz_iosettings( TPZIOSettings & tios,
 
     TMCC_READ_RESPONSE("pz_req_tpz_iosettings", 16)
 
-    uint16_t vl = *((uint16_t*) &m_rdbuf[8]);
+    uint16_t vl = decode<uint16_t>( m_rdbuf + 8 );
     if(vl == 0x01)
     {
         tios.VoltageLimit = VoltLimit::V75;
@@ -1693,12 +1844,16 @@ int tmcController::pz_req_tpz_iosettings( TPZIOSettings & tios,
         tios.VoltageLimit = VoltLimit::INVALID;
     }
 
-    tios.HubAnalogInput = *((uint16_t*) &m_rdbuf[10]);
+    if( tios.VoltageLimit == VoltLimit::INVALID )
+        return -1000;
+
+    tios.HubAnalogInput = decode<uint16_t>( m_rdbuf + 10 );
 
     return 0;
     
 }
 
+inline
 int tmcController::kpz_set_kcubemmiparams( const KMMIParams & kmp,
                                            bool errmsg /*default = true*/ 
                                          )
@@ -1709,15 +1864,17 @@ int tmcController::kpz_set_kcubemmiparams( const KMMIParams & kmp,
 
     m_sndbuf[6] = 0x01;
     m_sndbuf[7] = 0x00;
-    *((uint16_t*) &m_sndbuf[8]) = kmp.JSMode;
-    *((uint16_t*) &m_sndbuf[10]) = kmp.JSVoltGearBox;
-    *((int32_t*) &m_sndbuf[12]) = kmp.JSVoltStep;
-    *((uint16_t*) &m_sndbuf[16]) = kmp.DirSense;
-    *((int32_t*) &m_sndbuf[18]) = kmp.PresetVolt1;
-    *((int32_t*) &m_sndbuf[22]) = kmp.PresetVolt2;
-    *((uint16_t*) &m_sndbuf[26]) = kmp.DispBrightness;
-    *((uint16_t*) &m_sndbuf[28]) = kmp.DispTimeout;
-    *((uint16_t*) &m_sndbuf[30]) = kmp.DispDimLevel;
+    encode<uint16_t>( m_sndbuf + 8, kmp.JSMode );
+    encode<uint16_t>( m_sndbuf + 10, kmp.JSVoltGearBox );
+    encode<int32_t>( m_sndbuf + 12, kmp.JSVoltStep );
+    encode<uint16_t>( m_sndbuf + 16, kmp.DirSense );
+    encode<int32_t>( m_sndbuf + 18, kmp.PresetVolt1 );
+    encode<int32_t>( m_sndbuf + 22, kmp.PresetVolt2 );
+    encode<uint16_t>( m_sndbuf + 26, kmp.DispBrightness );
+    encode<uint16_t>( m_sndbuf + 28, kmp.DispTimeout );
+    encode<uint16_t>( m_sndbuf + 30, kmp.DispDimLevel );
+    m_sndbuf[32] = 0;
+    m_sndbuf[33] = 0;
     m_sndbuf[34] = 0;
     m_sndbuf[35] = 0;
     m_sndbuf[36] = 0;
@@ -1731,6 +1888,7 @@ int tmcController::kpz_set_kcubemmiparams( const KMMIParams & kmp,
 
 }
 
+inline
 int tmcController::kpz_req_kcubemmiparams( KMMIParams & kmp,
                                            bool errmsg /*default = true*/ 
                                          )
@@ -1743,15 +1901,15 @@ int tmcController::kpz_req_kcubemmiparams( KMMIParams & kmp,
 
     TMCC_READ_RESPONSE("kpz_req_kcubemmiparams", 40)
 
-    kmp.JSMode = *((uint16_t*) &m_rdbuf[8]);
-    kmp.JSVoltGearBox = *((uint16_t*) &m_rdbuf[10]);
-    kmp.JSVoltStep = *((int32_t*) &m_rdbuf[12]);
-    kmp.DirSense = *((uint16_t*) &m_rdbuf[16]);
-    kmp.PresetVolt1 = *((int32_t*) &m_rdbuf[18]);
-    kmp.PresetVolt2 = *((int32_t*) &m_rdbuf[22]);
-    kmp.DispBrightness = *((uint16_t*) &m_rdbuf[26]);
-    kmp.DispTimeout = *((uint16_t*) &m_rdbuf[28]);
-    kmp.DispDimLevel = *((uint16_t*) &m_rdbuf[30]);
+    kmp.JSMode = decode<uint16_t>( m_rdbuf + 8 );
+    kmp.JSVoltGearBox = decode<uint16_t>( m_rdbuf + 10 );
+    kmp.JSVoltStep = decode<int32_t>( m_rdbuf + 12 );
+    kmp.DirSense = decode<uint16_t>( m_rdbuf + 16 );
+    kmp.PresetVolt1 = decode<int32_t>( m_rdbuf + 18 );
+    kmp.PresetVolt2 = decode<int32_t>( m_rdbuf + 22 );
+    kmp.DispBrightness = decode<uint16_t>( m_rdbuf + 26 );
+    kmp.DispTimeout = decode<uint16_t>( m_rdbuf + 28 );
+    kmp.DispDimLevel = decode<uint16_t>( m_rdbuf + 30 );
 
     return 0;
 
