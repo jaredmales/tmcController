@@ -18,7 +18,7 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with mxlib.  If not, see <http://www.gnu.org/licenses/>.
+// along with tmcController.  If not, see <http://www.gnu.org/licenses/>.
 //***********************************************************************//
 
 #ifndef tmcController_hpp
@@ -76,13 +76,13 @@ class tmcController
   * @{ 
   */
 public:
-    /// Default c'tor
+    /// Allocate the uniquely owned FTDI context.
     /** Allocates \ref m_ftdi by calling \ftdi_new
       * 
       */
     tmcController();
 
-    /// Destructor
+    /// Close the device and release the FTDI context.
     /** Releases \ref m_ftdi by calling \ftdi_free
       * 
       */
@@ -96,13 +96,13 @@ public:
 
 ///@}
 
-/** \name FTDI Context Data
+/** \name FTDI Context - Data
   *
   * @{ 
   */
 protected:
      
-    /// The libftdi1 context structure
+    /// Uniquely owned libftdi1 context, or null if allocation failed.
     /** See \ftdi_context
      * 
      */
@@ -142,7 +142,7 @@ protected:
 ///@}
 
 
-/** \name Device Identification Data
+/** \name Device Identification - Data
   * @{ 
   */
 
@@ -178,7 +178,7 @@ protected:
   */
 
 public:
-    /// Set the USB vendor ID 
+    /// Set the USB vendor ID, releasing an open device if its identity changes.
     /** This is used to find the device when opening
       * \see m_vendor  
       */
@@ -190,7 +190,7 @@ public:
       */
     uint16_t vendor();
 
-    /// Set the USB product ID
+    /// Set the USB product ID, releasing an open device if its identity changes.
     /** This is used to find the device when opening
       * \see m_product
       */
@@ -202,8 +202,8 @@ public:
       */
     uint16_t product();
 
-    /// Set the USB serial number
-    /** This is used the find the device
+    /// Set the USB serial number, releasing an open device if its identity changes.
+    /** This is used to find the device
       * \see \ref m_serial   
       */
     void serial (const std::string & s /**< [in] the USB serial number */ );
@@ -217,7 +217,7 @@ public:
 
 ///@}
 
-/** \name Connection Management Data
+/** \name Connection Management - Data
   * @{ 
   */
 
@@ -300,7 +300,7 @@ public:
 
     /// Open the device
     /** Finds the device described by \ref m_vendor, \ref m_product, and \ref m_serial
-      * and opens it.  
+      * and opens it. Repeated open of the same identity is a no-op.
       * Calls \ftdi_usb_open_desc_index.
       * 
       * \returns 0 on success
@@ -331,7 +331,8 @@ public:
             );
 
     /// Close the device
-    /** Calls \ftdi_usb_close. 
+    /** Calls \ftdi_usb_close. Both connection flags are cleared even on a release error.
+      * Repeated close, including after allocation or partial connection failure, is safe.
       * 
       * \returns 0 on success (which includes if the device is not open)  
       * \returns <0 on error, see \ftdi_usb_close
@@ -351,19 +352,19 @@ public:
       *  -# Calls \ftdi_setflowctrl to set SIO_RTS_CTS_HS
       *  -# Calls \ftdi_setrts to set RTS to 1
       * 
-      * The error code returned by each function is offset in steps of -10 to allow you to decipher which \libftdi1 function failed.
+      * The error code returned by each function is offset in steps of -10 to identify the failing step.
+      * Any failure or cancellation releases the device and clears both connection flags.
       * 
       * \returns 0 on success
       * \returns < 0 if \ref open fails.  See \ftdi_usb_open_desc_index for codes.
-      * \returns < -20 if \ftdi_read_chipid fails (-10 + return value)
-      * \returns < -30 if \ftdi_set_baudrate fails (-20 + return value)
-      * \returns < -40 if \ftdi_set_line_property fails (-30 + return value)
-      * \returns -49 if an exception is thrown durign the pre-purge sleep
+      * \returns < -20 if \ftdi_read_chipid fails (-20 + return value)
+      * \returns < -30 if \ftdi_set_baudrate fails (-30 + return value)
+      * \returns < -40 if \ftdi_set_line_property fails (-40 + return value)
       * \returns < -50 if \ftdi_tcioflush fails
-      * \returns -59 if an exception is thrown durign the post-purge sleep
       * \returns < -60 if \ftdi_usb_reset fails
       * \returns < -70 if \ftdi_setflowctrl fails
       * \returns < -80 if \ftdi_setrts fails
+      * \returns -666 if communication is canceled
       */
     int connect( bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure*/);
 
@@ -408,7 +409,7 @@ public:
 
 ///@}
 
-/** \name Command Management Data
+/** \name Command Management - Data
   *
   * Member data to manage the sending of commands.
   *  
@@ -425,6 +426,19 @@ protected:
 
     /// Overall response deadline and individual USB control timeout, in milliseconds.
     uint32_t m_ioTimeout{1000};
+
+    /// The time to sleep in milliseconds after changing the channel enable state
+    /** Used during \ref mod_set_chanenablestate().
+      * Default is 500 ms.
+      */
+    uint32_t m_postChanEnableSleep {500};
+
+///@}
+
+/** \name Command Management
+  * Functions to manage sending commands.
+  * @{
+  */
 
     /// Pause in short slices, stopping promptly when communication is canceled.
     int pause( uint32_t milliseconds /**< [in] Maximum pause duration. */ );
@@ -448,22 +462,6 @@ protected:
     template<class valueT>
     static void encode( unsigned char *bytes /**< [out] sizeof(valueT) bytes. */,
                         valueT value /**< [in] Integer to encode. */ );
-
-    /// The time to sleep in milliseconds after changing the channel enable state
-    /** Used during \ref mod_set_chanenablestate().
-      * Default is 500 ms.  
-      */
-    uint32_t m_postChanEnableSleep {500};
-
-///@}
-
-/** \name Command Management
-  *
-  * Functions to manage the sending of commands.
-  *  
-  * @{ 
-  */
-
 
 public:
 
@@ -496,6 +494,8 @@ public:
     uint32_t postChanEnableSleep();
 
 
+///@}
+
 /** \name Command Data Structures
   *
   * Data structures for sending commands to and receiving responses from the device.
@@ -505,7 +505,7 @@ public:
 
 public:
 
-    /// The enable states of a driver chanel
+    /// The enable states of a driver channel
     enum class EnableState : uint8_t{ invalid = 0x00, ///< For error detection only, not used by TMC
                                       enabled = 0x01, ///< The channel is or will be enabled
                                       disabled = 0x02 ///< The channel is or will be disabled
@@ -622,7 +622,7 @@ public:
           */
         bool pcMode {false};
 
-        ///
+        /// Timestamp of the most recent decoded status.
         /** Set during \ref pz_req_pzstatusupdate 
           */
         timespec statusTime {0,0};
@@ -659,8 +659,11 @@ public:
       */
     struct TPZIOSettings
     { 
-        VoltLimit VoltageLimit {VoltLimit::INVALID}; ///< The voltage limit
-        uint16_t HubAnalogInput {0x00};              ///< The hub feedback setup
+        /// Selected maximum output voltage; INVALID denotes an unpopulated setting.
+        VoltLimit VoltageLimit {VoltLimit::INVALID};
+
+        /// Hub analog-input configuration sent to or received from the controller.
+        uint16_t HubAnalogInput {0x00};
 
         /// Dump details to a stream
         /**
@@ -676,14 +679,23 @@ public:
       */
     struct KMMIParams 
     {
+        /// Top-panel joystick operating mode.
         uint16_t JSMode {0x01};
+        /// Joystick voltage scaling selection.
         uint16_t JSVoltGearBox {0x03};
+        /// Joystick voltage increment in protocol units.
         int32_t JSVoltStep {1};
+        /// Joystick direction sense.
         int16_t DirSense {0};
+        /// First preset voltage in protocol units.
         int32_t PresetVolt1 {0};
+        /// Second preset voltage in protocol units.
         int32_t PresetVolt2 {0};
+        /// Display brightness setting.
         uint16_t DispBrightness {100};
+        /// Display inactivity timeout setting.
         uint16_t DispTimeout {0};
+        /// Display brightness while dimmed.
         uint16_t DispDimLevel {10};
 
         /// Dump details to a stream
@@ -701,7 +713,12 @@ public:
   * Declared here in order in which they appear in the manual.  Page numbers refer to Issue 37 of the manual,
   * dated 22 May 2023.
   * 
-  * In each command, error codes by \libftdi1 functions are offset to allow you to decipher which \libftdi1 function failed.
+  * In each command, libftdi1 errors retain operation-specific negative offsets.
+  * All commands may return -301 for a short write or -666 for cancellation/unavailability.
+  * Commands that flush may return -400 plus the FTDI error; requests may return -300
+  * for the overall response deadline or -302 for an unexpected header/channel.
+  * Failed or partially written commands are never replayed automatically. The caller
+  * must close/reconnect before resuming after transport or framing errors.
   * 
   * @{
   */
@@ -712,7 +729,7 @@ public:
     /** Sends the MGMSG_MOD_IDENTIFY command (0x0223).  
       * See page 46 of the APT Manual.
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns -666 if device not available in \ftdi_write_data 
@@ -724,16 +741,15 @@ public:
     /** Sends the MGMSG_MOD_SET_CHANENABLESTATE command (0x0210)
       * See page 47 of the APT Manual
       * 
-      * The KPZ101 sends a 10 byte reponse, after a delay, if this command changes the state.  This is undocumented in the manual.  
+      * The KPZ101 sends a 10 byte response, after a delay, if this command changes the state.  This is undocumented in the manual.
       * To account for this, after sending the command, this sleeps for \ref m_postChanEnableSleep milliseconds (default 500) and then flushes
       * the line with a read.  Nothing is done with the result, and it being 0 is not an error.
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data
-      * \returns -700 if sleep throws an exception
       * \returns -1000 if \p ces is EnableState::invalid
       * 
       */
@@ -748,7 +764,7 @@ public:
       * 
       * Note: KPZ101 will only return 0x01==enabled regardless of whether it is enabled or not.
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
@@ -765,7 +781,7 @@ public:
     /** Sends the MGMSG_HW_STOP_UPDATEMSGS command (0x0012)
       * See page 51 of the APT Manual. 
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns -666 if device not available in either \ftdi_write_data 
@@ -776,14 +792,14 @@ public:
     /** Sends the MGMSG_HW_REQ_INFO command (0x0005) and parses the result into a \ref HWInfo structure.
       * See page 52 of the APT manual.
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
       * \returns -300 if not enough data read
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
       */
-    int hw_req_info( HWInfo & hwi /**< [in] the \ref HWInfo structure to populate */,
+    int hw_req_info( HWInfo & hwi /**< [out] the \ref HWInfo structure to populate */,
                      bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                    );
 
@@ -791,13 +807,13 @@ public:
     /** Sends the MGMSG_PZ_SET_OUTPUTVOLTS command (0x0643).
       * See page 198 of the manual.
       *   
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns -666 if device not available in either \ftdi_write_data 
-      * \returns -980 if abs(ov) > 1
+      * \returns -980 if ov is nonfinite or outside [-1,1]
       */
-    int pz_set_outputvolts( const float & ov /**< [in] the output volts to set, converted from a percentage of max value */,
+    int pz_set_outputvolts( const float & ov /**< [in] the output volts to set, normalized to [-1,1] of maximum voltage */,
                             bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                           );
     
@@ -805,24 +821,24 @@ public:
     /** Sends the MGMSG_PZ_REQ_OUTPUTVOLTS command (0x0644).
       * See page 198 of the manual.
       *   
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
       * \returns -300 if not enough data read
       * \returns -666 if device not available in either \ftdi_write_data or \ftdi_read_data 
       */
-    int pz_req_outputvolts( float & ov /**< [out] the output volts currently set, converted to a percentage of maximum value */,
+    int pz_req_outputvolts( float & ov /**< [out] the output volts currently set, normalized to [-1,1] of maximum voltage */,
                             bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                           );
 
     /// Get Piezo status
-    /** Sends the MGMSG_PZ_REQ_PZSTATUSUPDATE command (0x0660) and parses the result into a \ref PZstatus structure.
+    /** Sends the MGMSG_PZ_REQ_PZSTATUSUPDATE command (0x0660) and parses the result into a \ref PZStatus structure.
       * See page 205 of the APT manual.
       *  
       * \note this currently only works for the TPZ001 KPZ101
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
@@ -837,12 +853,12 @@ public:
     /** Sends the MGMSG_PZ_SET_TPZ_DISPSETTINGS command (0x07D1)
       * See page 223 of the APT manual.
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns -666 if device not available in either \ftdi_write_data 
       */
-    int pz_set_tpz_dispsettings( const uint16_t & dispint /**< [in] The value to set.  Manual says 0-255.  Devices tested have a more limited range of XX to XX. */,
+    int pz_set_tpz_dispsettings( const uint16_t & dispint /**< [in] The value to set.  The protocol range is 0-255; firmware may support a narrower range. */,
                                  bool errmsg = true /**< [in] [optional] flag controlling if an error message is printed on failure */
                                );
 
@@ -850,7 +866,7 @@ public:
     /** Sends the MGMSG_PZ_REQ_TPZ_DISPSETTINGS command (0x07D2)
       * See page 223 of the APT manual.
       *
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
@@ -865,7 +881,7 @@ public:
     /** Sends the MGMSG_PZ_SET_TPZ_IOSETTINGS command (0x07D4) 
       * See page 224 of the manual.
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns -666 if device not available in either \ftdi_write_data 
@@ -879,7 +895,7 @@ public:
     /** Sends the MGMSG_PZ_REQ_TPZ_IOSETTINGS command (0x07D5) 
       * See page 224 of the manual.
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
@@ -894,7 +910,7 @@ public:
     /** Sends the MGMSG_KPZ_SET_KCUBEMMIPARAMS message (0x07F0).
       * See page 235 of the APT manual.
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns -666 if device not available in either \ftdi_write_data  
@@ -907,7 +923,7 @@ public:
     /** Sends the MGMSG_KPZ_REQ_KCUBEMMIPARAMS message (0x07F1) and parses the results.
       * See page 235 of the APT manual.
       * 
-      * \returns 0 on succcess
+      * \returns 0 on success
       * \returns <0 on error from connect
       * \returns <-100 on error from \ftdi_write_data (see also \libusb_bulk_transfer)
       * \returns <-200 on error from \ftdi_read_data (see also \libusb_bulk_transfer)
@@ -928,7 +944,7 @@ public:
 public:
 
     /// Print a message to std::cerr describing an error from an \libftdi1 function
-    /** Intended to be overriden in a derived class to provide custom error messaging.
+    /** Intended to be overridden in a derived class to provide custom error messaging.
       */
     virtual void ftdiErrmsg( const std::string & src /**< [in] The source of the error (the tmcController function) */,
                              const std::string & msg /**< [in] The message describing the error */,
@@ -938,7 +954,7 @@ public:
                            );
 
     /// Print a message to std::cerr describing an error 
-    /** Intended to be overriden in a derived class to provide custom error messaging.
+    /** Intended to be overridden in a derived class to provide custom error messaging.
       */
     virtual void otherErrmsg( const std::string & src /**< [in] The source of the error (the tmcController function) */,
                               const std::string & msg /**< [in] The message describing the error */,

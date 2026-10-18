@@ -118,7 +118,11 @@ inline void ftdi_free( ftdi_context *context /**< [in] Owned fake context. */ )
 
 /// Simulate a device open and detect attempts to overwrite an owned handle.
 inline int ftdi_usb_open_desc_index( ftdi_context *context /**< [in] Context. */,
-                                     int, int, const char *, const char *serial /**< [in] Device identity. */, unsigned )
+                                     [[maybe_unused]] int vendor /**< [in] Ignored vendor ID. */,
+                                     [[maybe_unused]] int product /**< [in] Ignored product ID. */,
+                                     [[maybe_unused]] const char *description /**< [in] Ignored description. */,
+                                     const char *serial /**< [in] Device identity. */,
+                                     [[maybe_unused]] unsigned index /**< [in] Ignored match index. */ )
 {
     if( context->usb_dev ) ftdiHarness::script.invalidAccess = true;
     ftdiHarness::script.contexts.at(context).serial = serial;
@@ -144,13 +148,16 @@ inline int ftdi_read_chipid( ftdi_context *context /**< [in] Context. */, unsign
 }
 
 /// Script baud-rate setup.
-inline int ftdi_set_baudrate( ftdi_context *context /**< [in] Context. */, int )
+inline int ftdi_set_baudrate( ftdi_context *context /**< [in] Context. */, [[maybe_unused]] int baud /**< [in] Ignored baud rate. */ )
 {
     return ftdiHarness::call(context, "baud");
 }
 
 /// Script line-property setup.
-inline int ftdi_set_line_property( ftdi_context *context /**< [in] Context. */, ftdi_bits_type, ftdi_stopbits_type, ftdi_parity_type )
+inline int ftdi_set_line_property( ftdi_context *context /**< [in] Context. */,
+                                   [[maybe_unused]] ftdi_bits_type bits /**< [in] Ignored word length. */,
+                                   [[maybe_unused]] ftdi_stopbits_type stop /**< [in] Ignored stop-bit selection. */,
+                                   [[maybe_unused]] ftdi_parity_type parity /**< [in] Ignored parity selection. */ )
 {
     return ftdiHarness::call(context, "line");
 }
@@ -169,13 +176,13 @@ inline int ftdi_usb_reset( ftdi_context *context /**< [in] Context. */ )
 }
 
 /// Script flow-control setup.
-inline int ftdi_setflowctrl( ftdi_context *context /**< [in] Context. */, int )
+inline int ftdi_setflowctrl( ftdi_context *context /**< [in] Context. */, [[maybe_unused]] int flow /**< [in] Ignored flow mode. */ )
 {
     return ftdiHarness::call(context, "flow");
 }
 
 /// Script RTS setup.
-inline int ftdi_setrts( ftdi_context *context /**< [in] Context. */, int )
+inline int ftdi_setrts( ftdi_context *context /**< [in] Context. */, [[maybe_unused]] int state /**< [in] Ignored RTS state. */ )
 {
     return ftdiHarness::call(context, "rts");
 }
@@ -233,7 +240,7 @@ inline int ftdi_read_data( ftdi_context *context /**< [in] Context. */,
 }
 
 /// Supply a stable fake error without inspecting a real context.
-inline const char *ftdi_get_error_string( ftdi_context * )
+inline const char *ftdi_get_error_string( [[maybe_unused]] ftdi_context *context /**< [in] Ignored context. */ )
 {
     return "scripted FTDI error";
 }
